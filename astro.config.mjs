@@ -10,47 +10,57 @@ export default defineConfig({
 			social: [
 				{ icon: 'github', label: 'GitHub', href: 'https://github.com/joaothaira/ThairaAI' },
 			],
+			defaultLocale: 'en',
+			locales: {
+				en: { label: 'English' },
+				'pt-br': { label: 'Português (Brasil)', lang: 'pt-BR' },
+			},
 			sidebar: [
 				{
 					label: 'Getting Started',
+					translations: { 'pt-BR': 'Primeiros Passos' },
 					items: [
-						{ label: 'Introduction', slug: 'getting-started/introduction' },
-						{ label: 'Installation', slug: 'getting-started/installation' },
-						{ label: 'Quick Start', slug: 'getting-started/quick-start' },
+						{ label: 'Introduction', translations: { 'pt-BR': 'Introdução' }, slug: 'getting-started/introduction' },
+						{ label: 'Installation', translations: { 'pt-BR': 'Instalação' }, slug: 'getting-started/installation' },
+						{ label: 'Quick Start', translations: { 'pt-BR': 'Início Rápido' }, slug: 'getting-started/quick-start' },
 					],
 				},
 				{
 					label: 'Google Integration',
+					translations: { 'pt-BR': 'Integração com Google' },
 					items: [
-						{ label: 'Overview', slug: 'google/overview' },
-						{ label: 'OAuth Setup', slug: 'google/oauth-setup' },
+						{ label: 'Overview', translations: { 'pt-BR': 'Visão Geral' }, slug: 'google/overview' },
+						{ label: 'OAuth Setup', translations: { 'pt-BR': 'Configuração OAuth' }, slug: 'google/oauth-setup' },
 						{ label: 'Gmail', slug: 'google/gmail' },
-						{ label: 'Calendar', slug: 'google/calendar' },
+						{ label: 'Calendar', translations: { 'pt-BR': 'Agenda' }, slug: 'google/calendar' },
 					],
 				},
 				{
 					label: 'Features',
+					translations: { 'pt-BR': 'Funcionalidades' },
 					items: [
-						{ label: 'Built-in Agent', slug: 'features/built-in-agent' },
-						{ label: 'Multi-Agent Mode', slug: 'features/multi-agent' },
-						{ label: 'Remote Access (WebUI)', slug: 'features/webui' },
-						{ label: 'Scheduled Tasks', slug: 'features/scheduled-tasks' },
-						{ label: 'Document Generation', slug: 'features/document-generation' },
-						{ label: 'Preview Panel', slug: 'features/preview-panel' },
+						{ label: 'Built-in Agent', translations: { 'pt-BR': 'Agente Integrado' }, slug: 'features/built-in-agent' },
+						{ label: 'Multi-Agent Mode', translations: { 'pt-BR': 'Modo Multi-Agente' }, slug: 'features/multi-agent' },
+						{ label: 'Remote Access (WebUI)', translations: { 'pt-BR': 'Acesso Remoto (WebUI)' }, slug: 'features/webui' },
+						{ label: 'Scheduled Tasks', translations: { 'pt-BR': 'Tarefas Agendadas' }, slug: 'features/scheduled-tasks' },
+						{ label: 'Document Generation', translations: { 'pt-BR': 'Geração de Documentos' }, slug: 'features/document-generation' },
+						{ label: 'Preview Panel', translations: { 'pt-BR': 'Painel de Visualização' }, slug: 'features/preview-panel' },
 					],
 				},
 				{
 					label: 'AI Models',
+					translations: { 'pt-BR': 'Modelos de IA' },
 					items: [
-						{ label: 'Supported Platforms', slug: 'models/supported-platforms' },
-						{ label: 'Configuration', slug: 'models/configuration' },
+						{ label: 'Supported Platforms', translations: { 'pt-BR': 'Plataformas Suportadas' }, slug: 'models/supported-platforms' },
+						{ label: 'Configuration', translations: { 'pt-BR': 'Configuração' }, slug: 'models/configuration' },
 					],
 				},
 				{
 					label: 'Contributing',
+					translations: { 'pt-BR': 'Contribuindo' },
 					items: [
-						{ label: 'Development Setup', slug: 'contributing/development-setup' },
-						{ label: 'Project Structure', slug: 'contributing/project-structure' },
+						{ label: 'Development Setup', translations: { 'pt-BR': 'Configuração de Desenvolvimento' }, slug: 'contributing/development-setup' },
+						{ label: 'Project Structure', translations: { 'pt-BR': 'Estrutura do Projeto' }, slug: 'contributing/project-structure' },
 					],
 				},
 			],

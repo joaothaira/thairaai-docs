@@ -1,0 +1,38 @@
+---
+title: ThairaAI
+description: Assistente de escritório com IA para documentos, e-mail, agenda e produtividade.
+template: splash
+hero:
+  tagline: Seu assistente de escritório com IA — documentos, e-mail, agenda e produtividade em um só lugar.
+  actions:
+    - text: Começar
+      link: /pt-br/getting-started/introduction/
+      icon: right-arrow
+    - text: GitHub
+      link: https://github.com/joaothaira/ThairaAI
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+  <Card title="Agente Integrado" icon="rocket">
+    Leitura e escrita de arquivos, busca na web, geração de imagens, ferramentas MCP — sem instalação de CLI.
+  </Card>
+  <Card title="Integração com Google" icon="email">
+    Entre com o Google para acessar Gmail e Agenda diretamente pelo assistente.
+  </Card>
+  <Card title="Modo Multi-Agente" icon="random">
+    Detecta automaticamente Claude Code, Codex, Gemini CLI e outros agentes instalados.
+  </Card>
+  <Card title="Acesso Remoto" icon="laptop">
+    O modo WebUI permite usar o assistente em qualquer navegador ou celular.
+  </Card>
+  <Card title="Tarefas Agendadas" icon="setting">
+    Automação com cron — configure uma vez e roda 24/7 sem intervenção.
+  </Card>
+  <Card title="Documentos de Escritório" icon="document">
+    Gere e edite PPT, Word e Excel com habilidades integradas.
+  </Card>
+</CardGrid>
