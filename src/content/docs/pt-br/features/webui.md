@@ -31,6 +31,7 @@ Você também pode acessar o ThairaAI por apps de mensagens configurando um toke
 - DingTalk
 - WeChat
 - WeCom (WeChat Empresarial)
+- WhatsApp
 - Slack (em breve)
 
 <Aside type="note">

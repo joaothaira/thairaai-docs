@@ -31,6 +31,7 @@ You can also reach ThairaAI through messaging apps by configuring a bot token in
 - DingTalk
 - WeChat
 - WeCom (Enterprise WeChat)
+- WhatsApp
 - Slack (coming soon)
 
 <Aside type="note">

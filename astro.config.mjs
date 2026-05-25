@@ -42,6 +42,7 @@ export default defineConfig({
 						{ label: 'Built-in Agent', translations: { 'pt-BR': 'Agente Integrado' }, slug: 'features/built-in-agent' },
 						{ label: 'Multi-Agent Mode', translations: { 'pt-BR': 'Modo Multi-Agente' }, slug: 'features/multi-agent' },
 						{ label: 'Remote Access (WebUI)', translations: { 'pt-BR': 'Acesso Remoto (WebUI)' }, slug: 'features/webui' },
+						{ label: 'WhatsApp Channel', translations: { 'pt-BR': 'Canal WhatsApp' }, slug: 'features/whatsapp' },
 						{ label: 'Scheduled Tasks', translations: { 'pt-BR': 'Tarefas Agendadas' }, slug: 'features/scheduled-tasks' },
 						{ label: 'Document Generation', translations: { 'pt-BR': 'Geração de Documentos' }, slug: 'features/document-generation' },
 						{ label: 'Preview Panel', translations: { 'pt-BR': 'Painel de Visualização' }, slug: 'features/preview-panel' },
@@ -53,6 +54,13 @@ export default defineConfig({
 					items: [
 						{ label: 'Supported Platforms', translations: { 'pt-BR': 'Plataformas Suportadas' }, slug: 'models/supported-platforms' },
 						{ label: 'Configuration', translations: { 'pt-BR': 'Configuração' }, slug: 'models/configuration' },
+					],
+				},
+				{
+					label: 'Architecture',
+					translations: { 'pt-BR': 'Arquitetura' },
+					items: [
+						{ label: 'WhatsApp Channel', translations: { 'pt-BR': 'Canal WhatsApp' }, slug: 'architecture/whatsapp' },
 					],
 				},
 				{
