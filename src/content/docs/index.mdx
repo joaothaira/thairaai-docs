@@ -1,0 +1,38 @@
+---
+title: ThairaAI
+description: AI-powered office assistant for documents, email, calendar, and productivity.
+template: splash
+hero:
+  tagline: Your AI-powered office assistant — documents, email, calendar, and productivity in one place.
+  actions:
+    - text: Get Started
+      link: /getting-started/introduction/
+      icon: right-arrow
+    - text: GitHub
+      link: https://github.com/joaothaira/ThairaAI
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+  <Card title="Built-in AI Agent" icon="rocket">
+    File read/write, web search, image generation, MCP tools — zero CLI setup required.
+  </Card>
+  <Card title="Google Integration" icon="email">
+    Sign in with Google to access Gmail and Calendar directly from the assistant.
+  </Card>
+  <Card title="Multi-Agent Mode" icon="random">
+    Auto-detects Claude Code, Codex, Gemini CLI and other installed CLI agents.
+  </Card>
+  <Card title="Remote Access" icon="laptop">
+    WebUI mode lets you use the assistant from any browser or phone.
+  </Card>
+  <Card title="Scheduled Tasks" icon="setting">
+    Cron-based automation — set it up once, runs 24/7 unattended.
+  </Card>
+  <Card title="Office Documents" icon="document">
+    Generate and edit PPT, Word, and Excel files via built-in skills.
+  </Card>
+</CardGrid>
