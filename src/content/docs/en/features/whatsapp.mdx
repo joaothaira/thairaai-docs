@@ -1,9 +1,9 @@
 ---
 title: WhatsApp Channel
-description: Chat with your ThairaAI assistant via WhatsApp.
+description: Chat with your ThairaAI assistant via WhatsApp, or use it as a professional receptionist to handle client messages automatically.
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside, Badge } from '@astrojs/starlight/components';
 
 The WhatsApp channel lets users send messages to ThairaAI through WhatsApp and receive AI replies back — using the same AI backends available in the desktop app.
 
@@ -68,6 +68,55 @@ In **Settings → Channels → WhatsApp**, choose the AI agent and model used fo
 ## Disabling
 
 Toggle the channel off in Settings. ThairaAI will deregister the webhook from whatsapp-api automatically.
+
+---
+
+## Business Mode <Badge text="Enterprise" variant="caution" />
+
+Business Mode flips the paradigm: instead of you chatting with your own assistant, your **clients** message your WhatsApp number and the AI responds on your behalf automatically — no manual pairing required.
+
+This is ideal for professionals who handle client inquiries through WhatsApp: therapists, law firms, clinics, consultancies, and any business that receives contacts through the app.
+
+<Aside type="caution">
+  Business Mode is an **Enterprise** feature. Anyone who messages the configured number will receive automatic AI replies without prior approval. Configure carefully.
+</Aside>
+
+### How to enable
+
+**Option 1 — Home screen**: click the toggle pill in the quick-action bar. The WhatsApp icon turns green when active. When enabled, you receive a confirmation message on your own WhatsApp number.
+
+**Option 2 — Settings**: go to **Settings → Channels → WhatsApp → Business Mode** and toggle it on.
+
+### Configuration fields
+
+| Field | Description | Example |
+|---|---|---|
+| Business name | Identifies your practice to the AI | `Silva Psychology Clinic` |
+| Professional name | Name the AI uses when referring to you | `Dr. Ana Silva` |
+| Working hours | Communicated to clients asking about availability | `Mon–Fri, 9am–6pm` |
+| Welcome message | First message sent to new contacts | *(auto-generated if left empty)* |
+
+### What changes with Business Mode on
+
+| Behavior | Standard mode | Business Mode |
+|---|---|---|
+| New contact | Receives pairing code | Receives welcome message and talks to the AI immediately |
+| Approval | Manual by the owner | Automatic |
+| AI context | Personal assistant | Practice receptionist with configured name, hours, and identity |
+
+### Receptionist preset
+
+To get the most out of Business Mode, select the **Therapy Receptionist** agent in **Settings → Channels → WhatsApp → Agent**. This preset is specialized in:
+
+- Verifying Google Calendar authentication before any action
+- Checking availability and offering time slots to the client
+- Creating appointments only after explicit client confirmation
+- Never providing clinical or psychological guidance
+- Responding in the client's language
+
+<Aside type="tip">
+  The receptionist preset uses Google Calendar tools (`google_list_events`, `google_create_event`). Set up the Google integration in **Settings → Integrations → Google** before enabling automatic scheduling.
+</Aside>
 
 ---
 

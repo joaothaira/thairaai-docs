@@ -7,6 +7,8 @@ This page covers the internal design of the WhatsApp integration for contributor
 
 ## Message flow
 
+### Existing contact (standard mode)
+
 ```
 User sends WhatsApp message
   → whatsapp-api stores in Postgres, fires POST /channels/whatsapp/webhook
@@ -17,9 +19,10 @@ User sends WhatsApp message
   → ActionExecutor.handleIncomingMessage()
       → pairing check (PairingService)
       → ActionExecutor.handleChatMessage()
-          → sendMessage("⏳ Thinking...")         # placeholder sent to WhatsApp
+          → buildBusinessContextForMessage()       # reads Business Mode config
+          → sendMessage("⏳ Thinking...")           # placeholder sent to WhatsApp
           → ChannelMessageService.sendMessage()
-              → history injection if task is fresh
+              → business context + history injection if task is fresh
               → workerTaskManager.getOrBuildTask()  # starts Claude Code (ACP)
               → ACP stream callback per chunk
                   → editMessage() → WhatsApp drops streaming chunks
@@ -29,6 +32,25 @@ User sends WhatsApp message
   → whatsapp-api delivers reply to user
 ```
 
+### New contact — Business Mode ON
+
+```
+Unknown client sends message
+  → ActionExecutor.handleIncomingMessage()
+      → PairingService.autoApproveUser()           # creates assistant_users record without a code
+      → WhatsAppPlugin.sendMessage(welcome)        # configured welcome message
+      → [falls through to normal chat flow above]
+```
+
+### New contact — Business Mode OFF
+
+```
+Unknown user sends message
+  → ActionExecutor.handleIncomingMessage()
+      → handlePairingShow()                        # sends 6-digit pairing code via WhatsApp
+      → waits for manual approval in the panel
+```
+
 ## Source files
 
 **New files:**
@@ -36,20 +58,27 @@ User sends WhatsApp message
 | File | Role |
 |---|---|
 | `src/process/channels/plugins/whatsapp/WhatsAppAdapter.ts` | Pure conversion: maps a raw whatsapp-api `Message` row to `IUnifiedIncomingMessage`. Filters outgoing echoes (`fromMe`) and historical sync events (`info.type !== 'notify'`). |
-| `src/process/channels/plugins/whatsapp/WhatsAppPlugin.ts` | Main plugin. Extends `BasePlugin`. JWT management, webhook registration, send/receive, active-user and thinking-state tracking. |
+| `src/process/channels/plugins/whatsapp/WhatsAppPlugin.ts` | Main plugin. Extends `BasePlugin`. JWT management, webhook registration, send/receive, active-user and thinking-state tracking, `getOwnerPhone()` for Business Mode notifications. |
 | `src/process/channels/plugins/whatsapp/index.ts` | Re-exports plugin + singleton accessors. |
 | `src/process/webserver/routes/whatsappChannelRoutes.ts` | Express route for `POST /channels/whatsapp/webhook`. Responds 200 immediately (whatsapp-api does not retry), then dispatches to the active plugin singleton. |
+| `src/process/resources/assistant/therapy-receptionist/therapy-receptionist.md` | Assistant preset for professional receptionist with Google Calendar scheduling skills. |
 
 **Modified files:**
 
 | File | Change |
 |---|---|
-| `src/process/channels/types.ts` | Added `'whatsapp'` to `BuiltinPluginType`, `isBuiltinChannelPlatform`, `hasPluginCredentials`, and `getChannelConversationName`. |
+| `src/process/channels/types.ts` | Added `'whatsapp'` to `BuiltinPluginType`, `isBuiltinChannelPlatform`, `hasPluginCredentials`, and `getChannelConversationName`. Business Mode fields added to `IPluginConfigOptions`. |
 | `src/process/channels/core/ChannelManager.ts` | Registered plugin; added to `builtinStartableTypes`; credential extraction; name/ID resolution. |
 | `src/process/webserver/routes/apiRoutes.ts` | Calls `registerWhatsAppChannelRoutes(app)`. |
 | `src/process/webserver/setup.ts` | Added `/channels/whatsapp/webhook` to CSRF exclusion list. |
-| `src/process/channels/gateway/ActionExecutor.ts` | `finalReplyMarkup` and `lastMessageContent` fixes (see below). |
-| `src/process/channels/agent/ChannelMessageService.ts` | History injection + `yoloMode` fix. |
+| `src/process/channels/gateway/ActionExecutor.ts` | `finalReplyMarkup` and `lastMessageContent` fixes. Auto-approval and business context injection in Business Mode. |
+| `src/process/channels/agent/ChannelMessageService.ts` | History injection + business context prefix + `yoloMode` fix. |
+| `src/process/channels/pairing/PairingService.ts` | New `autoApproveUser()` method for code-free approval. |
+| `src/common/config/storage.ts` | `assistant.whatsapp.businessMode` key added to config schema. |
+| `src/process/bridge/channelBridge.ts` | IPC handler `channel.notify-business-mode`. |
+| `src/common/adapter/ipcBridge.ts` | `channel.notifyBusinessMode` exposed to renderer. |
+| `src/renderer/components/settings/SettingsModal/contents/channels/WhatsAppConfigForm.tsx` | "Business Mode" section with toggle and config fields. |
+| `src/renderer/pages/guid/components/QuickActionButtons.tsx` | Quick-toggle pill on the home screen. |
 
 ## Design decisions
 
@@ -131,3 +160,61 @@ Only `type === 'text'` messages are included; `⏳` placeholder messages are fil
 ### `yoloMode` for WhatsApp
 
 `'whatsapp'` was missing from the `isFromChannel` check in `ChannelMessageService`, causing Claude Code to wait for manual UI permission approval instead of auto-approving. Added alongside Telegram, Lark, DingTalk, WeChat, and WeCom.
+
+---
+
+## Business Mode
+
+Business Mode flips the paradigm: instead of the owner chatting with their own assistant, **external clients** message the professional's WhatsApp number and the AI responds on their behalf.
+
+### Configuration
+
+Stored in `ConfigStorage` under the `assistant.whatsapp.businessMode` key:
+
+```ts
+{
+  autoApprove: boolean;      // enables the mode
+  businessName?: string;     // e.g. "Silva Psychology Clinic"
+  professionalName?: string; // e.g. "Dr. Ana Silva"
+  businessHours?: string;    // e.g. "Mon–Fri, 9am–6pm"
+  welcomeMessage?: string;   // custom first-contact message
+}
+```
+
+Config is read directly from `ProcessConfig` in the main process — no additional IPC needed.
+
+### Auto-approval
+
+`PairingService.autoApproveUser()` creates the `assistant_users` record without requiring a pairing code. If the user already exists it returns the existing record (idempotent). After creation it emits `channelBridge.userAuthorized` to update the panel.
+
+### Business context injection
+
+`ActionExecutor.buildBusinessContextForMessage()` builds a context string with the practice name, professional name, and working hours. This is passed to `ChannelMessageService.sendMessage()` and prepended to the message only when the ACP task is fresh (same pattern as history injection):
+
+```
+[System context:
+You are the AI receptionist for the following professional.
+Business: Silva Psychology Clinic
+Professional: Dr. Ana Silva
+Working hours: Mon–Fri, 9am–6pm
+]
+
+<client message>
+```
+
+### Owner notification
+
+When Business Mode is toggled via the quick-action pill on the home screen, the app sends a message to the **owner's own WhatsApp number** via the `channel.notify-business-mode` IPC:
+
+1. `channelBridge` retrieves the active WhatsApp plugin
+2. `WhatsAppPlugin.getOwnerPhone()` calls `GET /instance/fetchInstances` and extracts `ownerJid`
+3. Sends the status message directly to that number
+
+### Receptionist preset
+
+`src/process/resources/assistant/therapy-receptionist/therapy-receptionist.md` defines an assistant specialized in:
+- Verifying Google Calendar authentication before any action
+- Listing events, identifying free slots, and offering options to the client
+- Creating appointments only after explicit client confirmation
+- Never providing clinical or psychological guidance
+- Responding in the client's language

@@ -1,9 +1,9 @@
 ---
 title: Canal WhatsApp
-description: Converse com seu assistente ThairaAI pelo WhatsApp.
+description: Converse com seu assistente ThairaAI pelo WhatsApp, ou use como recepcionista profissional para atender clientes automaticamente.
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside, Badge } from '@astrojs/starlight/components';
 
 O canal WhatsApp permite que usuários enviem mensagens para o ThairaAI pelo WhatsApp e recebam respostas da IA — usando os mesmos backends de IA disponíveis no app desktop.
 
@@ -68,6 +68,55 @@ Em **Configurações → Canais → WhatsApp**, escolha o agente de IA e o model
 ## Desativando
 
 Desative o canal nas Configurações. O ThairaAI irá cancelar o registro do webhook no whatsapp-api automaticamente.
+
+---
+
+## Modo Profissional <Badge text="Enterprise" variant="caution" />
+
+O Modo Profissional inverte o paradigma: em vez de você conversar com seu próprio assistente, seus **clientes** enviam mensagens para o seu número WhatsApp e a IA responde automaticamente em seu nome — sem necessidade de pareamento manual.
+
+Isso é ideal para profissionais que precisam atender clientes por WhatsApp: terapeutas, consultórios, advogados, clínicas e qualquer negócio que receba contatos pelo app.
+
+<Aside type="caution">
+  O Modo Profissional é uma funcionalidade **Enterprise**. Qualquer pessoa que enviar uma mensagem para o número configurado receberá respostas automáticas da IA sem aprovação prévia. Configure com atenção.
+</Aside>
+
+### Como ativar
+
+**Opção 1 — Tela inicial**: clique no pill de toggle na barra de ações rápidas. O ícone do WhatsApp fica verde quando ativo. Ao ativar, você recebe uma confirmação no próprio WhatsApp.
+
+**Opção 2 — Configurações**: acesse **Configurações → Canais → WhatsApp → Modo Profissional** e ative o toggle.
+
+### Campos de configuração
+
+| Campo | Descrição | Exemplo |
+|---|---|---|
+| Nome do consultório/empresa | Identificação do negócio injetada no contexto da IA | `Clínica Silva Psicologia` |
+| Nome do profissional | Nome usado pela IA ao se referir ao responsável | `Dra. Ana Silva` |
+| Horário de atendimento | Informado à IA para comunicar disponibilidade | `Seg–Sex, 9h–18h` |
+| Mensagem de boas-vindas | Primeira mensagem enviada a novos contatos | *(padrão automático se vazio)* |
+
+### O que muda com o Modo Profissional ativo
+
+| Comportamento | Modo padrão | Modo Profissional |
+|---|---|---|
+| Novo contato | Recebe código de pareamento | Recebe mensagem de boas-vindas e já conversa com a IA |
+| Aprovação | Manual pelo proprietário | Automática |
+| Contexto da IA | Assistente pessoal | Recepcionista do consultório com nome, horário e identidade configurados |
+
+### Preset de recepcionista
+
+Para aproveitar ao máximo o Modo Profissional, selecione o agente **Therapy Receptionist** em **Configurações → Canais → WhatsApp → Agente**. Esse preset é especializado em:
+
+- Verificar a autenticação do Google Calendar antes de qualquer ação
+- Consultar disponibilidade e oferecer horários ao cliente
+- Criar agendamentos somente após confirmação explícita
+- Nunca oferecer orientação clínica ou psicológica
+- Responder no idioma do cliente
+
+<Aside type="tip">
+  O preset de recepcionista usa as ferramentas do Google Calendar (`google_list_events`, `google_create_event`). Configure a integração com o Google em **Configurações → Integrações → Google** antes de usar o agendamento automático.
+</Aside>
 
 ---
 

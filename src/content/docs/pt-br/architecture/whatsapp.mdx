@@ -7,6 +7,8 @@ Esta página cobre o design interno da integração WhatsApp para contribuidores
 
 ## Fluxo de mensagens
 
+### Contato existente (modo padrão)
+
 ```
 Usuário envia mensagem no WhatsApp
   → whatsapp-api armazena no Postgres, dispara POST /channels/whatsapp/webhook
@@ -17,9 +19,10 @@ Usuário envia mensagem no WhatsApp
   → ActionExecutor.handleIncomingMessage()
       → verificação de pareamento (PairingService)
       → ActionExecutor.handleChatMessage()
-          → sendMessage("⏳ Thinking...")         # placeholder enviado ao WhatsApp
+          → buildBusinessContextForMessage()       # lê config do Modo Profissional
+          → sendMessage("⏳ Thinking...")           # placeholder enviado ao WhatsApp
           → ChannelMessageService.sendMessage()
-              → injeção de histórico se tarefa for nova
+              → injeção de contexto profissional + histórico se tarefa for nova
               → workerTaskManager.getOrBuildTask()  # inicia Claude Code (ACP)
               → callback de stream ACP por chunk
                   → editMessage() → WhatsApp descarta chunks intermediários
@@ -27,6 +30,25 @@ Usuário envia mensagem no WhatsApp
               → WhatsAppPlugin.editMessage()        # replyMarkup verdadeiro → envia
               → WhatsAppPlugin.sendMessage()        # HTTP POST para o whatsapp-api
   → whatsapp-api entrega a resposta ao usuário
+```
+
+### Novo contato — Modo Profissional ativo
+
+```
+Cliente desconhecido envia mensagem
+  → ActionExecutor.handleIncomingMessage()
+      → PairingService.autoApproveUser()           # cria registro em assistant_users sem código
+      → WhatsAppPlugin.sendMessage(welcome)        # mensagem de boas-vindas configurada
+      → [cai no fluxo normal de chat acima]
+```
+
+### Novo contato — Modo Profissional inativo
+
+```
+Usuário desconhecido envia mensagem
+  → ActionExecutor.handleIncomingMessage()
+      → handlePairingShow()                        # exibe código de 6 dígitos no WhatsApp
+      → aguarda aprovação manual no painel
 ```
 
 ## Arquivos fonte
@@ -44,12 +66,24 @@ Usuário envia mensagem no WhatsApp
 
 | Arquivo | Mudança |
 |---|---|
-| `src/process/channels/types.ts` | Adicionado `'whatsapp'` a `BuiltinPluginType`, `isBuiltinChannelPlatform`, `hasPluginCredentials` e `getChannelConversationName`. |
+| `src/process/channels/types.ts` | Adicionado `'whatsapp'` a `BuiltinPluginType`, `isBuiltinChannelPlatform`, `hasPluginCredentials` e `getChannelConversationName`. Campos do Modo Profissional em `IPluginConfigOptions`. |
 | `src/process/channels/core/ChannelManager.ts` | Plugin registrado; adicionado a `builtinStartableTypes`; extração de credenciais; resolução de nome/ID. |
 | `src/process/webserver/routes/apiRoutes.ts` | Chama `registerWhatsAppChannelRoutes(app)`. |
 | `src/process/webserver/setup.ts` | Adicionado `/channels/whatsapp/webhook` à lista de exclusão CSRF. |
-| `src/process/channels/gateway/ActionExecutor.ts` | Correções em `finalReplyMarkup` e `lastMessageContent` (veja abaixo). |
-| `src/process/channels/agent/ChannelMessageService.ts` | Injeção de histórico + correção de `yoloMode`. |
+| `src/process/channels/gateway/ActionExecutor.ts` | Correções em `finalReplyMarkup` e `lastMessageContent`. Auto-aprovação e injeção de contexto profissional no Modo Profissional. |
+| `src/process/channels/agent/ChannelMessageService.ts` | Injeção de histórico + contexto profissional + correção de `yoloMode`. |
+| `src/process/channels/pairing/PairingService.ts` | Novo método `autoApproveUser()` para aprovação sem código. |
+| `src/common/config/storage.ts` | Chave `assistant.whatsapp.businessMode` adicionada ao schema de config. |
+| `src/process/bridge/channelBridge.ts` | Handler IPC `channel.notify-business-mode`. |
+| `src/common/adapter/ipcBridge.ts` | Método `channel.notifyBusinessMode` exposto ao renderer. |
+| `src/renderer/components/settings/SettingsModal/contents/channels/WhatsAppConfigForm.tsx` | Seção "Modo Profissional" com toggle e campos de configuração. |
+| `src/renderer/pages/guid/components/QuickActionButtons.tsx` | Pill de toggle rápido do Modo Profissional na tela inicial. |
+
+**Novos arquivos:**
+
+| Arquivo | Papel |
+|---|---|
+| `src/process/resources/assistant/therapy-receptionist/therapy-receptionist.md` | Preset de assistente recepcionista profissional com agendamento via Google Calendar. |
 
 ## Decisões de design
 
@@ -131,3 +165,61 @@ Apenas mensagens `type === 'text'` são incluídas; placeholders `⏳` são filt
 ### `yoloMode` para WhatsApp
 
 `'whatsapp'` estava ausente da verificação `isFromChannel` no `ChannelMessageService`, fazendo o Claude Code aguardar aprovação manual de permissões na UI em vez de aprovar automaticamente. Adicionado ao lado de Telegram, Lark, DingTalk, WeChat e WeCom.
+
+---
+
+## Modo Profissional (Business Mode)
+
+O Modo Profissional inverte o paradigma: em vez do proprietário conversar com seu próprio assistente, **clientes externos** mensagem o número WhatsApp do profissional e a IA responde em nome dele.
+
+### Configuração
+
+Armazenada em `ConfigStorage` sob a chave `assistant.whatsapp.businessMode`:
+
+```ts
+{
+  autoApprove: boolean;      // habilita o modo
+  businessName?: string;     // ex: "Clínica Silva Psicologia"
+  professionalName?: string; // ex: "Dra. Ana Silva"
+  businessHours?: string;    // ex: "Seg-Sex, 9h–18h"
+  welcomeMessage?: string;   // mensagem de boas-vindas personalizada
+}
+```
+
+A configuração é lida diretamente do `ProcessConfig` no processo principal — sem IPC adicional necessário.
+
+### Auto-aprovação
+
+`PairingService.autoApproveUser()` cria o registro em `assistant_users` sem exigir código de pareamento. Se o usuário já existe, retorna o existente (idempotente). Após a criação, emite `channelBridge.userAuthorized` para atualizar o painel.
+
+### Injeção de contexto profissional
+
+`ActionExecutor.buildBusinessContextForMessage()` monta uma string de contexto com nome do consultório, profissional e horários. Esse contexto é passado para `ChannelMessageService.sendMessage()` e prefixado à mensagem apenas quando a tarefa ACP é nova (mesmo padrão da injeção de histórico):
+
+```
+[System context:
+You are the AI receptionist for the following professional.
+Business: Clínica Silva Psicologia
+Professional: Dra. Ana Silva
+Working hours: Seg-Sex, 9h–18h
+]
+
+<mensagem do cliente>
+```
+
+### Notificação ao proprietário
+
+Ao ativar ou desativar o Modo Profissional pelo pill na tela inicial, o app envia uma mensagem para o **próprio número do proprietário** via `channel.notify-business-mode` IPC:
+
+1. `channelBridge` busca o plugin WhatsApp ativo
+2. `WhatsAppPlugin.getOwnerPhone()` chama `GET /instance/fetchInstances` e extrai o `ownerJid`
+3. Envia a mensagem de status diretamente para esse número
+
+### Preset de recepcionista
+
+`src/process/resources/assistant/therapy-receptionist/therapy-receptionist.md` define um assistente especializado em:
+- Verificar autenticação do Google Calendar antes de qualquer ação
+- Listar eventos, identificar slots livres e oferecer opções ao cliente
+- Criar agendamentos somente após confirmação explícita
+- Nunca oferecer orientação clínica ou psicológica
+- Responder no idioma do cliente
