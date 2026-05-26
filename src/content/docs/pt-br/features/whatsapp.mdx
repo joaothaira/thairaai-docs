@@ -54,6 +54,19 @@ Usuários do WhatsApp precisam ser aprovados antes que a IA responda.
 
 Após aprovação, todas as mensagens desse número recebem respostas da IA.
 
+## Tipos de mensagem suportados
+
+| Tipo | Como é tratado |
+|---|---|
+| Texto | Encaminhado à IA diretamente |
+| Imagem | Baixada para um arquivo temporário; a IA recebe o caminho local e a legenda como texto |
+| Mensagem de voz | Convertida de OGG/Opus para WAV, transcrita via Fala para Texto, e encaminhada como texto |
+| Arquivo de áudio | Mesmo pipeline das mensagens de voz |
+
+<Aside type="tip">
+  A transcrição de voz e áudio requer que o recurso de Fala para Texto esteja ativo. Acesse **Configurações → Ferramentas → Fala para Texto** e escolha um provedor. A opção **Whisper Local** roda inteiramente na sua máquina, sem necessidade de chave de API.
+</Aside>
+
 ## Comportamento das conversas
 
 - **Respostas**: o ThairaAI envia respostas como novas mensagens no WhatsApp (o WhatsApp não suporta edição de mensagens)
@@ -68,6 +81,23 @@ Em **Configurações → Canais → WhatsApp**, escolha o agente de IA e o model
 ## Desativando
 
 Desative o canal nas Configurações. O ThairaAI irá cancelar o registro do webhook no whatsapp-api automaticamente.
+
+---
+
+## Aba WhatsApp Web
+
+Ao abrir uma conversa do WhatsApp no app desktop, a área de conversa exibe duas abas:
+
+| Aba | Conteúdo |
+|---|---|
+| **Chat** | O chat com o assistente de IA — mensagens enviadas e recebidas pelo canal WhatsApp |
+| **WhatsApp Web** | Um navegador WhatsApp Web embutido (`web.whatsapp.com`) |
+
+O WhatsApp Web roda como um **singleton global**: o navegador embutido nunca é destruído ao trocar de conversa ou navegar para outra parte do app. Leia o QR code uma vez — a sessão persiste enquanto a janela do app estiver aberta (e entre reinicializações, já que o armazenamento do navegador é isolado em `persist:whatsapp-web`).
+
+<Aside type="tip">
+  Trocar entre conversas do WhatsApp mantém a aba do WhatsApp Web aberta e já conectada. Não é necessário ler o QR code novamente.
+</Aside>
 
 ---
 

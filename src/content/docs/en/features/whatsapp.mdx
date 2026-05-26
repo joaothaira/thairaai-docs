@@ -54,6 +54,19 @@ WhatsApp users must be approved before the AI responds to them.
 
 After approval, all messages from that number receive AI replies.
 
+## Supported message types
+
+| Type | How it's handled |
+|---|---|
+| Text | Forwarded to the AI as-is |
+| Image | Downloaded to a temp file; the AI receives the local path and any caption as text |
+| Voice message | Converted from OGG/Opus to WAV, transcribed via Speech-to-Text, then forwarded as text |
+| Audio file | Same pipeline as voice messages |
+
+<Aside type="tip">
+  Voice and audio transcription require Speech-to-Text to be enabled. Go to **Settings → Tools → Speech to Text** and choose a provider. The **Local Whisper** option runs entirely on your machine with no API key required.
+</Aside>
+
 ## Conversation behavior
 
 - **Replies**: ThairaAI sends AI replies as new WhatsApp messages (WhatsApp does not support message editing)
@@ -68,6 +81,23 @@ In **Settings → Channels → WhatsApp**, choose the AI agent and model used fo
 ## Disabling
 
 Toggle the channel off in Settings. ThairaAI will deregister the webhook from whatsapp-api automatically.
+
+---
+
+## WhatsApp Web tab
+
+When you open a WhatsApp conversation in the desktop app, the conversation area shows two tabs:
+
+| Tab | Content |
+|---|---|
+| **Chat** | The AI assistant chat — messages sent and received through the WhatsApp channel |
+| **WhatsApp Web** | An embedded WhatsApp Web browser (`web.whatsapp.com`) |
+
+The WhatsApp Web view runs as a **global singleton**: the embedded browser is never destroyed when you switch between conversations or navigate elsewhere in the app. Scan the QR code once — the session persists for the life of the app window (and across restarts, since the browser storage is isolated under `persist:whatsapp-web`).
+
+<Aside type="tip">
+  Switching between WhatsApp conversations keeps the WhatsApp Web tab open and already logged in. No re-scan is needed.
+</Aside>
 
 ---
 

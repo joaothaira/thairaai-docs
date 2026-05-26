@@ -8,7 +8,7 @@ Esta página cobre o design interno da integração WhatsApp para contribuidores
 
 ## Fluxo de mensagens
 
-### Contato existente (modo padrão)
+### Contato existente — mensagem de texto
 
 ```
 Usuário envia mensagem no WhatsApp
@@ -16,6 +16,7 @@ Usuário envia mensagem no WhatsApp
   → whatsappWebhookHandler (Express) responde 200 imediatamente
   → WhatsAppPlugin.handleInboundWebhook()
       → WhatsAppAdapter.toUnifiedIncomingMessage() → IUnifiedIncomingMessage
+      → (download de mídia + normalização — veja abaixo)
       → messageHandler() (definido pelo ChannelManager)
   → ActionExecutor.handleIncomingMessage()
       → verificação de pareamento (PairingService)
@@ -23,7 +24,7 @@ Usuário envia mensagem no WhatsApp
           → buildBusinessContextForMessage()       # lê config do Modo Profissional
           → sendMessage("⏳ Thinking...")           # placeholder enviado ao WhatsApp
           → ChannelMessageService.sendMessage()
-              → injeção de contexto profissional + histórico se tarefa for nova
+              → injeção de contexto + histórico se tarefa for nova
               → workerTaskManager.getOrBuildTask()  # inicia Claude Code (ACP)
               → callback de stream ACP por chunk
                   → editMessage() → WhatsApp descarta chunks intermediários
@@ -31,6 +32,44 @@ Usuário envia mensagem no WhatsApp
               → WhatsAppPlugin.editMessage()        # replyMarkup verdadeiro → envia
               → WhatsAppPlugin.sendMessage()        # HTTP POST para o whatsapp-api
   → whatsapp-api entrega a resposta ao usuário
+```
+
+### Contato existente — mensagem de imagem
+
+```
+Usuário envia imagem (com legenda opcional)
+  → WhatsAppAdapter.toUnifiedIncomingMessage()
+      → contentType = 'photo'
+      → attachments = [{ type: 'photo', fileId: media.path }]
+  → WhatsAppPlugin.handleInboundWebhook()
+      → downloadMediaToTemp('/chat/public/image/download?q=...')
+          → GET serverUrl+path com auth JWT
+          → salva em $TEMP/wa-media-{timestamp}.jpg
+      → attachments[0].fileName = localPath
+      → normalizeMediaContent() → { type: 'text', text: '[Image: /tmp/wa-media-...jpg]\nCaption: ...' }
+  → ActionExecutor → handleChatMessage() com texto normalizado
+  → IA recebe caminho da imagem + legenda como mensagem de texto
+```
+
+### Contato existente — mensagem de voz
+
+```
+Usuário envia mensagem de voz (OGG/Opus)
+  → WhatsAppAdapter.toUnifiedIncomingMessage()
+      → contentType = 'voice'
+      → attachments = [{ type: 'voice', fileId: media.path }]
+  → WhatsAppPlugin.handleInboundWebhook()
+      → downloadMediaToTemp('/chat/public/audio/download?q=...')
+          → salva em $TEMP/wa-media-{timestamp}.ogg
+      → transcribeAudio(localPath)
+          → convertToWav()  # ffmpeg: OGG/Opus → WAV 16 kHz mono
+          → SpeechToTextService.transcribe()  # whisper local ou provedor em nuvem
+          → deleta o arquivo .wav temporário
+          → retorna texto transcrito
+      → se transcrito: unified.content = { type: 'text', text: transcricao }
+      → se falhar: sendMessage(sttErrorNotice(err)) → return
+  → ActionExecutor → handleChatMessage() com texto transcrito
+  → IA recebe as palavras faladas como mensagem de texto
 ```
 
 ### Novo contato — Modo Profissional ativo
@@ -52,41 +91,82 @@ Usuário desconhecido envia mensagem
       → aguarda aprovação manual no painel
 ```
 
+### Contato autorizado — chat pausado pelo profissional
+
+```
+Cliente autorizado envia mensagem enquanto o chat está pausado
+  → ActionExecutor.handleIncomingMessage()
+      → PairingService.isUserAuthorized() → true
+      → ProcessConfig.get('assistant.whatsapp.businessMode')
+          → bm.excludedChats.includes(chatId) → true
+          → return  # descartado silenciosamente — profissional responde manualmente
+```
+
 ## Arquivos fonte
 
 **Novos arquivos:**
 
 | Arquivo | Papel |
 |---|---|
-| `src/process/channels/plugins/whatsapp/WhatsAppAdapter.ts` | Conversão pura: mapeia uma linha `Message` do whatsapp-api para `IUnifiedIncomingMessage`. Filtra mensagens de eco (`fromMe`) e eventos de sincronização histórica (`info.type !== 'notify'`). |
-| `src/process/channels/plugins/whatsapp/WhatsAppPlugin.ts` | Plugin principal. Estende `BasePlugin`. Gerencia JWT, registro de webhook, envio/recebimento e rastreamento de estado. |
-| `src/process/channels/plugins/whatsapp/index.ts` | Re-exporta plugin + acessores singleton. |
+| `src/process/channels/plugins/whatsapp/WhatsAppAdapter.ts` | Conversão pura: mapeia uma linha `Message` do whatsapp-api para `IUnifiedIncomingMessage`. Filtra mensagens de eco (`fromMe`) e eventos de sincronização histórica (`info.type !== 'notify'`). Popula `attachments` para mensagens de imagem/voz/áudio. |
+| `src/process/channels/plugins/whatsapp/WhatsAppPlugin.ts` | Plugin principal. Estende `BasePlugin`. Gerencia JWT, registro de webhook, envio/recebimento, download de mídia, conversão OGG→WAV, transcrição de voz, rastreamento de usuários ativos e estado de "pensando", `getOwnerPhone()` para notificações do Modo Profissional. |
+| `src/process/channels/plugins/whatsapp/index.ts` | Re-exporta plugin + acessores singleton (`getActiveWhatsAppPlugin`). |
 | `src/process/webserver/routes/whatsappChannelRoutes.ts` | Rota Express para `POST /channels/whatsapp/webhook`. Responde 200 imediatamente (o whatsapp-api não tenta novamente), depois despacha para o singleton do plugin ativo. |
+| `src/process/resources/assistant/therapy-receptionist/therapy-receptionist.md` | Preset de assistente recepcionista profissional com agendamento via Google Calendar. |
+| `src/process/resources/skills/whatsapp/SKILL.md` | Skill carregada pelo agente desktop. Ensina a IA a emitir blocos `[WA_SEND]` e `[WA_FETCH]` quando o usuário pede para enviar ou ler mensagens do WhatsApp. |
+| `src/process/task/WhatsAppCommandDetector.ts` | Interpreta blocos `[WA_SEND]` e `[WA_FETCH]` no output da IA. Exporta `detectWaCommands`, `hasWaCommands`, `stripWaCommands`. |
+| `src/process/task/WhatsAppMiddleware.ts` | Executa os comandos WhatsApp: chama `sendMessage` ou `fetchMessages` no plugin ativo e emite uma resposta de sistema de volta à IA. |
+| `src/process/channels/actions/WhatsAppPlatformActions.ts` | Handlers dos comandos `/pause` e `/resume` no chat. Adiciona/remove o chatId de `excludedChats` na config. |
+| `src/renderer/pages/conversation/components/WhatsAppAgentToggle.tsx` | Switch por chat renderizado no cabeçalho da conversa. Lê e grava `excludedChats` via `ConfigStorage` direto do renderer. |
+| `src/renderer/pages/conversation/hooks/WhatsAppWebContext.tsx` | Contexto React global + provider (`WhatsAppWebProvider`) que possui o único `WebviewHost` persistente do WhatsApp Web. Expõe `registerSlot` e `setWebVisible` para painéis de conversa. Rastreia o bounding rect do elemento slot via `ResizeObserver` e posiciona o webview fixo sobre ele. |
+| `whisper.cpp/` | Build local do whisper.cpp. Binário em `whisper.cpp/build/bin/whisper-server`, com symlink em `/Volumes/server-ssd/bin/whisper-server`. Modelo em `whisper.cpp/models/ggml-base.bin`. |
 
 **Arquivos modificados:**
 
 | Arquivo | Mudança |
 |---|---|
+| `src/process/channels/plugins/whatsapp/WhatsAppAdapter.ts` | Adicionado preenchimento de `attachments` para tipos de mensagem `photo`, `voice`, `audio`, `document`. |
+| `src/process/channels/plugins/whatsapp/WhatsAppPlugin.ts` | Adicionado tipo `WaFetchedMessage` e método `fetchMessages(remoteJid, limit)` — chama `GET /chat/findMessages/{instanceName}` na API CodeChat. |
+| `src/common/types/speech.ts` | Adicionado `'local'` a `SpeechToTextProvider`. Novo `LocalSpeechToTextConfig { url?, language? }`. Campo `local?` adicionado a `SpeechToTextConfig`. |
+| `src/process/bridge/services/SpeechToTextService.ts` | Adicionado `transcribeWithLocal()` — envia áudio multipart para um servidor compatível com whisper.cpp via HTTP. |
+| `src/renderer/components/settings/SettingsModal/contents/ToolsModalContent.tsx` | Opção "Whisper Local" no select de provedor; renderiza campos de URL e idioma para o provedor `local`. |
+| `src/renderer/services/i18n/locales/en-US/settings.json` | Adicionados `speechToTextProviderLocal`, `speechToTextLocalUrl` e labels do toggle por usuário no Modo Profissional. |
+| `src/renderer/services/i18n/locales/pt-BR/settings.json` | Mesmas adições em português. |
 | `src/process/channels/types.ts` | Adicionado `'whatsapp'` a `BuiltinPluginType`, `isBuiltinChannelPlatform`, `hasPluginCredentials` e `getChannelConversationName`. Campos do Modo Profissional em `IPluginConfigOptions`. |
 | `src/process/channels/core/ChannelManager.ts` | Plugin registrado; adicionado a `builtinStartableTypes`; extração de credenciais; resolução de nome/ID. |
 | `src/process/webserver/routes/apiRoutes.ts` | Chama `registerWhatsAppChannelRoutes(app)`. |
 | `src/process/webserver/setup.ts` | Adicionado `/channels/whatsapp/webhook` à lista de exclusão CSRF. |
-| `src/process/channels/gateway/ActionExecutor.ts` | Correções em `finalReplyMarkup` e `lastMessageContent`. Auto-aprovação e injeção de contexto profissional no Modo Profissional. |
+| `src/process/channels/gateway/ActionExecutor.ts` | Correções em `finalReplyMarkup` e `lastMessageContent`. Auto-aprovação e injeção de contexto profissional. Roteamento de `/pause`/`/resume`. Verificação de exclusão por chat para usuários autorizados. |
 | `src/process/channels/agent/ChannelMessageService.ts` | Injeção de histórico + contexto profissional + correção de `yoloMode`. |
 | `src/process/channels/pairing/PairingService.ts` | Novo método `autoApproveUser()` para aprovação sem código. |
-| `src/common/config/storage.ts` | Chave `assistant.whatsapp.businessMode` adicionada ao schema de config. |
+| `src/common/config/storage.ts` | `assistant.whatsapp.businessMode` atualizado com campo `excludedChats?: string[]`. |
 | `src/process/bridge/channelBridge.ts` | Handler IPC `channel.notify-business-mode`. |
 | `src/common/adapter/ipcBridge.ts` | Método `channel.notifyBusinessMode` exposto ao renderer. |
-| `src/renderer/components/settings/SettingsModal/contents/channels/WhatsAppConfigForm.tsx` | Seção "Modo Profissional" com toggle e campos de configuração. |
+| `src/renderer/components/settings/SettingsModal/contents/channels/WhatsAppConfigForm.tsx` | Seção "Modo Profissional" com toggle, campos de configuração e Switch de exclusão por usuário autorizado. |
+| `src/renderer/components/media/WebviewHost.tsx` | Adicionada prop `userAgent?: string`; conectada ao atributo `useragent` do `<webview>` do Electron quando fornecida. |
+| `src/renderer/main.tsx` | Adicionado `WhatsAppWebProvider` na cadeia global de `AppProviders` para montar o webview singleton uma única vez na raiz do app. |
+| `src/renderer/pages/conversation/components/ChatConversation.tsx` | Adicionado componente `WhatsAppConversationPanel` com barra de abas Chat/WhatsApp Web; retorno antecipado para conversas WhatsApp (`name.startsWith('wa-acp-')`). `WhatsAppAgentToggle` adicionado ao cabeçalho do painel. |
 | `src/renderer/pages/guid/components/QuickActionButtons.tsx` | Pill de toggle rápido do Modo Profissional na tela inicial. |
-
-**Novos arquivos:**
-
-| Arquivo | Papel |
-|---|---|
-| `src/process/resources/assistant/therapy-receptionist/therapy-receptionist.md` | Preset de assistente recepcionista profissional com agendamento via Google Calendar. |
+| `src/process/task/AcpAgentManager.ts` | Após resposta da IA, detecta blocos WA e chama `processWaInMessage`. |
+| `src/process/task/GeminiAgentManager.ts` | Idem. |
+| `src/process/task/AionrsManager.ts` | Idem. |
+| `package.json` | Adicionada dependência de desenvolvimento `concurrently`. Novos scripts: `start:wa`, `start:wa:whisper`. |
 
 ## Decisões de design
+
+### Webview singleton do WhatsApp Web
+
+A aba WhatsApp Web incorpora `web.whatsapp.com` via `<webview>` do Electron. Montar um `<webview>` dentro do `WhatsAppConversationPanel` diretamente destruiria e recriaria o componente a cada troca de conversa — exigindo novo QR code.
+
+**Solução:** `WhatsAppWebProvider` (montado uma vez no `AppProviders`) possui o único `<webview>` e o renderiza como overlay `position: fixed`. Os painéis de conversa expõem um `<div>` de "slot" via `registerSlot(el)`. O provider rastreia o `getBoundingClientRect()` do slot com um `ResizeObserver` e reposiciona o overlay fixo para coincidir com ele.
+
+Detalhes-chave da implementação:
+
+- **`visibility: hidden` em vez de `display: none`** — O div do slot deve sempre ter `position: absolute; inset: 0` com `visibility: hidden/visible`. Usar `display: none` colapsa o elemento, fazendo `getBoundingClientRect()` retornar zeros e causando o desaparecimento do webview.
+- **Sem `key` no `WhatsAppConversationPanel`** — Sem a prop `key`, o React reutiliza a instância do painel ao trocar entre conversas WhatsApp. Isso mantém o slot montado e o webview visível entre os chats.
+- **`partition='persist:whatsapp-web'`** — O storage de sessão do Electron para o webview é isolado nessa chave de partição e sobrevive a reinicializações do app. O usuário lê o QR code uma única vez.
+- **User agent do Chrome** — O WhatsApp Web detecta navegadores não-Chrome e se recusa a carregar. O webview recebe uma string de user agent do Chrome 120 via prop `userAgent` no `WebviewHost`.
+- **Border radius** — `getComputedStyle(slotEl).borderRadius` é lido no momento da medição e aplicado ao container fixo com `overflow: hidden`, fazendo o webview recortar com as bordas arredondadas do painel.
 
 ### Auto-inicialização do servidor HTTP
 
@@ -134,6 +214,70 @@ if (isStatusMsg && this.thinkingChats.has(chatId)) {
 }
 ```
 
+### Suporte a imagens
+
+`WhatsAppAdapter` detecta `imageMessage` e cria um attachment com `fileId` apontando para a URL de download do whatsapp-api (`/chat/public/image/download?q=...`).
+
+`WhatsAppPlugin.handleInboundWebhook` baixa a imagem para um arquivo `.jpg` temporário e grava o caminho local em `attachments[0].fileName`. `normalizeMediaContent()` então converte o conteúdo para uma mensagem de texto simples:
+
+```
+[Image: /tmp/wa-media-1234567890.jpg]
+Caption: o que há nessa foto?
+```
+
+Esse texto é encaminhado à IA, que pode ler o arquivo usando suas ferramentas.
+
+### Transcrição de voz
+
+Mensagens de voz do WhatsApp chegam como OGG/Opus, que o whisper.cpp não decodifica diretamente. O pipeline converte para WAV antes da transcrição:
+
+```ts
+// 1. Converte OGG/Opus → WAV 16 kHz mono
+const wavPath = await this.convertToWav(oggPath);
+
+// 2. Transcreve via SpeechToTextService (qualquer provedor configurado)
+const result = await SpeechToTextService.transcribe({
+  audioBuffer: Array.from(fs.readFileSync(wavPath)),
+  fileName: 'audio.wav',
+  mimeType: 'audio/wav',
+});
+
+// 3. Remove o WAV; encaminha transcrição à IA
+```
+
+`convertToWav` executa `ffmpeg -ar 16000 -ac 1 -f wav`. O `.ogg` original é mantido (já foi gravado no temp por `downloadMediaToTemp`); o `.wav` é deletado após a transcrição independentemente de sucesso ou falha.
+
+Se a transcrição falhar por qualquer motivo, o plugin responde diretamente ao usuário com uma mensagem de erro específica em vez de encaminhar à IA:
+
+| Código do erro | Mensagem enviada |
+|---|---|
+| `STT_DISABLED` | "Speech-to-Text está desabilitado. Ative em Configurações → Ferramentas." |
+| `STT_OPENAI_NOT_CONFIGURED` | "Chave da API OpenAI Whisper não configurada…" |
+| `STT_DEEPGRAM_NOT_CONFIGURED` | "Chave da API Deepgram não configurada…" |
+| `STT_REQUEST_FAILED:…` | "Transcrição falhou: …" (inclui detalhe do erro do servidor) |
+| outro | "Não foi possível transcrever a mensagem de voz: …" |
+
+### Provedor Whisper Local
+
+Um novo provedor `'local'` foi adicionado ao `SpeechToTextService`. Ele chama um servidor HTTP compatível com whisper.cpp:
+
+- **Endpoint:** `POST {url}/inference` (formulário multipart com `file` + `language` opcional)
+- **Resposta:** `{ text: "..." }`
+- **URL padrão:** `http://localhost:8080`
+
+`LocalSpeechToTextConfig`:
+
+```ts
+type LocalSpeechToTextConfig = {
+  url?: string;      // padrão: http://localhost:8080
+  language?: string; // código ISO 639-1, ex: "pt"
+};
+```
+
+Configure em **Configurações → Ferramentas → Fala para Texto → Whisper Local**.
+
+O build do whisper.cpp fica em `whisper.cpp/` com o modelo `ggml-base`. O binário do servidor possui symlink em `/Volumes/server-ssd/bin/whisper-server` (que está no `$PATH` via `~/.zshrc`).
+
 ### Guard de tipo em `lastMessageContent`
 
 O evento `agent_status` pode chegar *após* a resposta de texto no stream ACP. O `ActionExecutor` rastreava todo evento de stream como o "último conteúdo de mensagem", então a chamada final de `editMessage` podia receber `{ text: '⏳ claude' }` em vez da resposta real da IA — que era então suprimida, resultando em nenhuma entrega.
@@ -167,6 +311,26 @@ Apenas mensagens `type === 'text'` são incluídas; placeholders `⏳` são filt
 
 `'whatsapp'` estava ausente da verificação `isFromChannel` no `ChannelMessageService`, fazendo o Claude Code aguardar aprovação manual de permissões na UI em vez de aprovar automaticamente. Adicionado ao lado de Telegram, Lark, DingTalk, WeChat e WeCom.
 
+### Scripts de inicialização concorrente
+
+Dois scripts baseados em `concurrently` estão disponíveis para desenvolvimento:
+
+```bash
+# App + whatsapp-api
+bun run start:wa
+
+# App + whatsapp-api + servidor whisper
+bun run start:wa:whisper
+```
+
+`start:wa:whisper` executa o whisper-server com o modelo base incluído:
+
+```
+whisper-server -m ../whisper.cpp/models/ggml-base.bin
+```
+
+Os três processos compartilham um único terminal com prefixos coloridos (`app`, `wa-api`, `whisper`). `--kill-others-on-fail` garante que todos os processos encerrem se qualquer um deles travar.
+
 ---
 
 ## Modo Profissional (Business Mode)
@@ -184,6 +348,7 @@ Armazenada em `ConfigStorage` sob a chave `assistant.whatsapp.businessMode`:
   professionalName?: string; // ex: "Dra. Ana Silva"
   businessHours?: string;    // ex: "Seg-Sex, 9h–18h"
   welcomeMessage?: string;   // mensagem de boas-vindas personalizada
+  excludedChats?: string[];  // chatIds com IA pausada (resposta manual do profissional)
 }
 ```
 
@@ -216,6 +381,30 @@ Ao ativar ou desativar o Modo Profissional pelo pill na tela inicial, o app envi
 2. `WhatsAppPlugin.getOwnerPhone()` chama `GET /instance/fetchInstances` e extrai o `ownerJid`
 3. Envia a mensagem de status diretamente para esse número
 
+### Exclusão por chat (pausando a IA para um contato)
+
+`excludedChats` é uma lista de JIDs do WhatsApp (`5511999@s.whatsapp.net`) onde a IA deve ficar silenciosa e deixar o profissional responder manualmente.
+
+A exclusão é verificada em dois pontos em `ActionExecutor.handleIncomingMessage`:
+
+1. **Caminho de novo contato** — `getBusinessModeConfig(platform, chatId)` retorna `null` se `chatId` estiver em `excludedChats`, então a auto-aprovação é ignorada e o fluxo de pareamento é exibido.
+2. **Caminho de usuário autorizado** — após a verificação de autorização, um guard dedicado lê a config bruta e retorna cedo (descarta a mensagem silenciosamente) se o chatId estiver excluído:
+
+```ts
+if (isAuthorized && platform === 'whatsapp' && chatId) {
+  const bm = await ProcessConfig.get('assistant.whatsapp.businessMode');
+  if (bm?.excludedChats?.includes(chatId)) return;
+}
+```
+
+Três formas de alternar a exclusão:
+
+| Método | Quem | Onde |
+|---|---|---|
+| **Toggle de UI** | Profissional | Cabeçalho da conversa (Switch renderizado por `WhatsAppAgentToggle`) |
+| **Lista de configurações** | Admin | Configurações → Canais → WhatsApp → lista de usuários autorizados (Switch por usuário) |
+| **Comando no chat** | Cliente ou profissional no chat do WhatsApp | `/pause` para adicionar, `/resume` para remover |
+
 ### Preset de recepcionista
 
 `src/process/resources/assistant/therapy-receptionist/therapy-receptionist.md` define um assistente especializado em:
@@ -224,3 +413,69 @@ Ao ativar ou desativar o Modo Profissional pelo pill na tela inicial, o app envi
 - Criar agendamentos somente após confirmação explícita
 - Nunca oferecer orientação clínica ou psicológica
 - Responder no idioma do cliente
+
+---
+
+## Skill WhatsApp
+
+A Skill WhatsApp permite ao **agente desktop** (janela principal do ThairaAI) enviar mensagens e buscar histórico recente de qualquer contato do WhatsApp sob demanda. Usa o mesmo padrão de blocos de protocolo + middleware das skills `cron` e `weixin-file-send`.
+
+### Blocos de protocolo
+
+A IA emite um ou mais blocos dentro do texto de resposta:
+
+```
+[WA_SEND]{"number":"5511999999999","text":"Vou me atrasar"}[/WA_SEND]
+[WA_FETCH]{"number":"5511999999999","limit":10}[/WA_FETCH]
+```
+
+- **`[WA_SEND]`** — fire-and-forget. Processado após o turno da IA. Emite mensagem de sistema `✅ Enviado para {number}`.
+- **`[WA_FETCH]`** — dois passos. O runtime busca mensagens recentes do contato, injeta como mensagem de sistema e a IA continua com esse contexto (mesmo padrão do `[CRON_LIST]`).
+
+### Ativação da skill
+
+`src/process/resources/skills/whatsapp/SKILL.md` tem um gatilho no frontmatter:
+
+```yaml
+---
+name: whatsapp
+description: |
+  Use quando o usuário quiser enviar uma mensagem WhatsApp ou ler mensagens
+  recentes de um contato. Requer WhatsApp conectado.
+---
+```
+
+O arquivo é carregado automaticamente quando o usuário pergunta sobre mensagens do WhatsApp. Contém sintaxe, descrição de campos e exemplos para os dois blocos.
+
+### Pipeline de execução
+
+Após cada turno da IA, os três gerenciadores (`AcpAgentManager`, `GeminiAgentManager`, `AionrsManager`) chamam `processWaInMessage` se `hasWaCommands` for verdadeiro:
+
+```
+Texto de resposta da IA
+  → hasWaCommands() → true
+  → detectWaCommands() → [{ kind: 'send', number, text }, ...]
+  → processWaInMessage()
+      para cada comando:
+        send  → getActiveWhatsAppPlugin().sendMessage(jid, { type:'text', text })
+                emite "✅ Enviado para {number}"
+        fetch → plugin.fetchMessages(jid, limit)
+                formata mensagens como lista legível
+                emite resultado como mensagem de sistema → IA continua
+        sem plugin → emite "⚠️ WhatsApp não está conectado."
+```
+
+### `fetchMessages`
+
+`WhatsAppPlugin.fetchMessages(remoteJid, limit)` normaliza números simples para JIDs completos (`5511999@s.whatsapp.net`) antes de consultar:
+
+```
+GET {serverUrl}/chat/findMessages/{instanceName}?remoteJid={jid}&count={limit}
+Authorization: Bearer {jwtToken}
+```
+
+Retorna `WaFetchedMessage[]`:
+
+```ts
+type WaFetchedMessage = { from: string; text: unknown; timestamp: number };
+```
