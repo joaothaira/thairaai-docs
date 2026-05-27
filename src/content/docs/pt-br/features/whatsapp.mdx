@@ -144,8 +144,39 @@ Para aproveitar ao máximo o Modo Profissional, selecione o agente **Therapy Rec
 - Nunca oferecer orientação clínica ou psicológica
 - Responder no idioma do cliente
 
+A IA também recebe a data e a hora atuais em toda mensagem, então referências relativas como *"amanhã às 10h"*, *"próxima segunda"* ou *"daqui a 2 dias"* são resolvidas sem precisar perguntar ao cliente o ano, dia da semana ou mês.
+
 <Aside type="tip">
   O preset de recepcionista usa as ferramentas do Google Calendar (`google_list_events`, `google_create_event`). Configure a integração com o Google em **Configurações → Integrações → Google** antes de usar o agendamento automático.
+</Aside>
+
+### Agenda de Atendimentos
+
+Para impedir que a IA recepcionista leia (ou grave por engano) na sua agenda pessoal do Google, o ThairaAI usa uma **agenda dedicada** para todos os agendamentos de clientes.
+
+Acesse **Configurações → Integrações → Google** (o painel aparece assim que sua conta Google estiver conectada) e use a seção **Agenda de Atendimentos**:
+
+| Ação | Quando usar |
+|---|---|
+| **Criar agenda dedicada** | Primeira configuração — cria uma agenda nova chamada `ThairaAI — Agendamentos (<seu nome>)` |
+| **ou escolher existente…** | Se você já tem uma agenda usada para atendimentos (ou uma criada num computador anterior), selecione no dropdown |
+| **Limpar** | Desvincula a agenda — a IA volta a responder "agendamento temporariamente indisponível" |
+
+O dropdown só lista agendas onde você tem **permissão de escrita**. Agendas com nome ThairaAI ou Agendamento aparecem no topo.
+
+#### O que a IA pode e não pode ver
+
+| Configuração | IA lista eventos? | IA cria eventos? | IA vê sua agenda pessoal? |
+|---|---|---|---|
+| **Sem agenda configurada** | Não | Sim, em `primary` (legado) | Limitado — somente escrita |
+| **Agenda dedicada configurada** | Sim, só a dedicada | Sim, só a dedicada | **Não** |
+
+Quando uma agenda dedicada está definida, o system prompt explicitamente proíbe a IA de tocar na agenda primária, no Gmail ou nos contatos. Em perguntas sobre disponibilidade, a IA descreve horários ocupados em termos genéricos ("esse horário não está disponível") e nunca revela títulos, nomes ou convidados de outros agendamentos.
+
+**Suas próprias consultas também funcionam.** Quando você manda mensagem para seu próprio assistente ThairaAI ("quais consultas tenho hoje?", "lista os agendamentos da próxima semana"), a IA usa a agenda dedicada por padrão — então você vê exatamente o que a recepcionista agendou, sem o LLM precisar ler sua agenda pessoal do Google. Se quiser olhar a agenda pessoal, basta pedir explicitamente ("olha na minha agenda pessoal") — as ferramentas aceitam um override explícito.
+
+<Aside type="caution">
+  Se você apagar a agenda dedicada direto pelo Google Calendar, o ThairaAI ainda tem o ID guardado. Clique em **Limpar** no painel antes de criar uma nova, ou use o dropdown **ou escolher existente…** para revincular.
 </Aside>
 
 ---

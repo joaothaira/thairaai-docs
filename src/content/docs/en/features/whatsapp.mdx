@@ -144,8 +144,39 @@ To get the most out of Business Mode, select the **Therapy Receptionist** agent 
 - Never providing clinical or psychological guidance
 - Responding in the client's language
 
+The AI also receives the current date/time on every message, so relative references like *"tomorrow at 10am"*, *"next Monday"*, or *"in two days"* are resolved without asking the client to confirm year, weekday, or month.
+
 <Aside type="tip">
   The receptionist preset uses Google Calendar tools (`google_list_events`, `google_create_event`). Set up the Google integration in **Settings → Integrations → Google** before enabling automatic scheduling.
+</Aside>
+
+### Appointment Calendar
+
+To prevent the AI receptionist from reading (or accidentally writing into) your personal Google Calendar, ThairaAI uses a **dedicated calendar** for all client bookings.
+
+Open **Settings → Integrations → Google** (visible once your Google account is connected) and use the **Appointment Calendar** panel:
+
+| Action | When to use |
+|---|---|
+| **Create dedicated calendar** | First-time setup — creates a new calendar named `ThairaAI — Agendamentos (<your name>)` |
+| **or choose existing…** | If you already have a calendar you use for client appointments (or one created on a previous device), pick it from the dropdown |
+| **Clear** | Unlinks the calendar — the AI returns to "scheduling temporarily unavailable" mode |
+
+The dropdown only lists calendars you have **write access** to. ThairaAI-named calendars are bubbled to the top.
+
+#### What the AI can and cannot see
+
+| Configuration | AI can list events | AI can create events | AI can see personal calendar |
+|---|---|---|---|
+| **No calendar configured** | No | Yes, on `primary` (legacy) | Limited — write only |
+| **Dedicated calendar configured** | Yes, only the dedicated one | Yes, only the dedicated one | **No** |
+
+When a dedicated calendar is set, the system prompt explicitly forbids the AI from touching the primary calendar, Gmail, or contacts. When clients ask about availability, the AI describes occupied slots in general terms ("this time isn't available") and never reveals other clients' booking titles, names, or attendees.
+
+**Your own queries work too.** When you message your own ThairaAI assistant ("what appointments do I have today?", "list my bookings for next week"), the AI defaults to the dedicated appointment calendar — so you see exactly what the receptionist has booked, without the LLM having to read your personal Google Calendar. You can still ask it to look at your personal calendar by saying "check my personal calendar" — the underlying tools accept an explicit override.
+
+<Aside type="caution">
+  If you delete the dedicated calendar directly in Google Calendar, ThairaAI still has the ID stored. Click **Clear** in the settings panel before creating a new one, or use the **or choose existing…** dropdown to re-link.
 </Aside>
 
 ---

@@ -360,18 +360,107 @@ A configuração é lida diretamente do `ProcessConfig` no processo principal �
 
 ### Injeção de contexto profissional
 
-`ActionExecutor.buildBusinessContextForMessage()` monta uma string de contexto com nome do consultório, profissional e horários. Esse contexto é passado para `ChannelMessageService.sendMessage()` e prefixado à mensagem apenas quando a tarefa ACP é nova (mesmo padrão da injeção de histórico):
+`ActionExecutor.buildBusinessContextForMessage()` monta uma string de contexto com nome do consultório, profissional, horários, **data/hora atual** e um fluxo que ramifica conforme exista (ou não) uma agenda dedicada de atendimentos. Esse contexto é passado para `ChannelMessageService.sendMessage()` e **prefixado em toda mensagem** (não só na primeira), para a IA nunca perder a persona de recepcionista entre turnos em sessões retomadas:
 
 ```
 [System context:
-You are the AI receptionist for the following professional.
+ROLE: You are the WhatsApp receptionist for Dra. Ana Silva at Clínica Silva Psicologia.
 Business: Clínica Silva Psicologia
 Professional: Dra. Ana Silva
 Working hours: Seg-Sex, 9h–18h
+
+CURRENT DATE & TIME: 2026-05-26T23:41:54.000Z (segunda-feira, 26 de maio de 2026 às 20:41,
+timezone America/Sao_Paulo).
+Use this as the reference for any relative date the client mentions ("amanhã", "próxima
+segunda", "daqui a 2 dias"). NEVER ask the client to confirm the year, weekday, or month.
+
+CRITICAL — WHO YOU ARE TALKING TO:
+- You are NOT talking to Dra. Ana Silva. You are talking to a CLIENT (third party).
+- The Google Calendar belongs to Dra. Ana Silva, NOT to the client.
+- Refer to the professional in the third person; refer to the client as "você".
+
+CALENDAR SCHEDULING WORKFLOW (with dedicated calendar configured):
+1. Call google_auth_status ONCE per turn (silent check).
+2. If the client asks about availability, call google_list_events on the dedicated
+   appointment calendar — never the primary calendar.
+3. Collect details, then call google_create_event. The event title MUST include the
+   client name/phone (e.g. "Consulta — João, 553197388888").
+4. Confirm in plain language; do NOT echo event IDs or technical output.
+
+RESTRICTIONS (calendar configured):
+- Read AND write only the dedicated calendar; never touch the primary calendar/Gmail/contacts.
+- When listing events, only describe occupied slots in general terms ("esse horário não
+  está disponível") — never reveal other clients' booking titles or attendees.
+- Never modify or delete existing events.
 ]
 
 <mensagem do cliente>
 ```
+
+Quando a agenda dedicada **não** está configurada, o prompt instrui a IA a não chamar `google_list_events` de forma alguma (ler a agenda primária vazaria dados privados).
+
+`GeminiDirectAgent` extrai o bloco `[System context:…]` via regex e passa o texto capturado como `config.systemInstruction` para `ai.models.generateContentStream()`. O texto limpo do usuário (sem o wrapper) é o que vai para o histórico. Isso transforma a persona numa instrução formal de sistema, melhorando a aderência.
+
+### GeminiDirectAgent
+
+`src/process/task/GeminiDirectAgent.ts` é uma implementação leve de `IAgentManager` para sessões Gemini de clientes em Modo Profissional. Ele **não** desabilita chamadas de ferramentas — em vez disso declara um conjunto mínimo e fixo de ferramentas e executa essas chamadas em processo, sem CLI do Gemini nem subprocesso MCP.
+
+Características:
+- **Sem subprocesso** — chama `@google/genai` `generateContentStream` diretamente no processo principal.
+- **Histórico em memória** — `Array<{ role, parts }>` (suporta partes `text`, `functionCall` e `functionResponse`), limitado a 40 turnos.
+- **Resolução de chave de API** — usa `model.apiKey` se definido; senão cai para `process.env.GEMINI_API_KEY`. O valor explícito é sempre passado para `GoogleGenAI({ apiKey })` para que `prepareEnvironment()` de outros agentes não derrube esta sessão.
+- **Extração da instrução de sistema** — a cada `sendMessage`, remove o prefixo `[System context:\n…\n]`, guarda o texto extraído em `this.systemPrompt` e o passa como `config.systemInstruction`. O texto limpo do usuário é o que entra no histórico.
+- **Function declarations fixas** — toda requisição inclui `tools: CALENDAR_TOOLS` com três funções: `google_auth_status`, `google_create_event` e `google_list_events`. O Gemini não consegue chamar mais nada — não há MCP, shell, leitura de arquivo.
+- **Laço multi-turn para ferramentas** — `sendMessage()` roda um `while (continueLoop && toolTurns < MAX_TOOL_TURNS)`. A cada iteração faz streaming da resposta; se chegarem partes `functionCall`, elas são executadas via `executeTool()` (que despacha para `googleIntegrationService.getStatus()` / `createEvent()` / `listEvents()`, sendo que estas duas últimas usam `getAppointmentCalendarId()` para ler de `google.integration.appointmentCalendarId`, caindo para `'primary'` se vazio). Os resultados voltam para o histórico como `functionResponse` e o laço continua até o Gemini parar de chamar ferramentas. Limite de 5 turnos para evitar loops infinitos.
+- **Persistência da mensagem do cliente** — imediatamente após extrair o contexto, o agente chama `addMessage(conversation_id, { type: 'text', position: 'right', … })`. Sem isso, só as respostas do assistente apareciam no chat — a versão anterior tinha esse bug.
+- **Visibilidade das tool calls** — para cada chamada, o agente emite um evento `tool_group` duas vezes com o mesmo `toolMsgId`: primeiro com `status: 'Executing'` e descrição em pt-BR (ex.: "Verificando conexão com Google Calendar"), depois com `status: 'Success'` ou `'Error'` e `resultDisplay` com o retorno da ferramenta. O `composeMessage` mescla por msg_id, então a UI mostra a transição de status ao vivo.
+- **Emissão dupla** — `emit()` envia cada evento tanto para `ipcBridge.geminiConversation.responseStream` (UI em tempo real) quanto para `channelEventBus.emitAgentMessage` (entrega no WhatsApp), e chama `addOrUpdateMessage` para persistir no SQLite.
+
+### Agenda dedicada de atendimentos
+
+Sessões de recepcionista precisam agendar sem vazar a agenda pessoal do profissional. O ThairaAI persiste o ID de uma Google Calendar em `google.integration.appointmentCalendarId` (com `appointmentCalendarName` para exibição); todas as ferramentas do Gemini e o próprio prompt do sistema ramificam conforme isso esteja preenchido.
+
+**Ciclo de vida (`GoogleIntegrationService`):**
+- `createCalendar(summary)` chama `calendar.calendars.insert` com o timezone local e retorna `{ id, summary }`.
+- `listCalendars()` chama `calendarList.list({ minAccessRole: 'writer' })`, garantindo que o picker mostre só agendas onde o usuário pode escrever.
+- `createEvent(params, calendarId = 'primary')` e `listEvents(maxResults, calendarId = 'primary')` aceitam `calendarId` opcional — o default `'primary'` mantém o comportamento original para chamadores não-recepcionista.
+
+**UI de configurações (`GoogleSettings.tsx`):**
+O painel "Agenda de Atendimentos" só aparece quando `status.connected` é verdadeiro. Quando nenhuma agenda está configurada, mostra dois controles:
+- **"Criar agenda dedicada"** — botão primário. Nome padrão `ThairaAI — Agendamentos (<professionalName>)` se o campo `professionalName` do modo profissional estiver preenchido, senão só `ThairaAI — Agendamentos`. Persiste imediatamente em `google.integration`.
+- **"ou escolher existente…"** Select — carrega as agendas com permissão de escrita sob foco (`loadAvailableCalendars()` cacheia o resultado para fazer só um IPC por sessão). Ordem: nomes com "ThairaAI"/"Agendamento" primeiro, depois `primary`, depois alfabética. Selecionar uma persiste imediatamente. Útil para quem já tinha uma agenda dedicada de outra ferramenta, ou quer testar com a agenda pessoal.
+
+Quando uma agenda já está configurada, o painel colapsa para o nome dela mais um botão Limpar.
+
+**Resolução no lado do agente (`GeminiDirectAgent.getAppointmentCalendarId()`):**
+
+```ts
+async function getAppointmentCalendarId(): Promise<string> {
+  const cfg = await ProcessConfig.get('google.integration');
+  const id = cfg?.appointmentCalendarId?.trim();
+  return id && id.length > 0 ? id : 'primary';
+}
+```
+
+Chamado dentro de `executeTool()` tanto em `google_create_event` quanto em `google_list_events`. Se nenhuma agenda estiver configurada, `google_list_events` retorna uma string avisando o modelo que não há agenda — em vez de despejar o conteúdo da agenda primária. Defesa em profundidade sobre a restrição no nível do prompt.
+
+**Restrição no prompt (`ActionExecutor.buildBusinessContextForMessage()`):**
+O system prompt lê `google.integration.appointmentCalendarId` e ramifica:
+- *Configurada*: instrui a IA a chamar `google_list_events` para perguntas sobre disponibilidade, descrever horários ocupados em termos genéricos, nunca revelar títulos de agendamentos de terceiros, e gravar todos os eventos novos na agenda dedicada.
+- *Não configurada*: proíbe explicitamente `google_list_events`; a IA só pode chamar `google_auth_status` e `google_create_event`.
+
+**Sessões do proprietário / ACP:**
+A engenharia de recepcionista acima só dispara para sessões `role: 'client'` (o contato WhatsApp falando *com* a recepcionista). O proprietário — ou seja, o profissional conversando com seu próprio assistente — segue o caminho ACP padrão com toda a ferramentaria do Claude Code, e acessa a agenda via o MCP server builtin `aionui-google-integration`.
+
+Esse MCP server é um subprocesso stdio lançado a partir da entrada em `mcp.config` (persistida em `aionui-config.txt`). Suas ferramentas `google_list_events` e `google_create_event` leem `process.env.APPOINTMENT_CALENDAR_ID` (via `getDefaultCalendarId()`) e usam como `calendarId` padrão, com parâmetro opcional `calendar_id` para opt-out (ex.: `calendar_id: 'primary'` para consultar a agenda pessoal do profissional). A env var é populada por `buildGoogleEnv()` em `initStorage.ts`, que lê `google.integration.appointmentCalendarId` do arquivo de config no momento do spawn.
+
+Quando o usuário cria ou seleciona uma agenda em **Configurações → Integrações → Google**, o renderer chama um dos dois métodos IPC do processo principal (`googleIntegration.createCalendar` ou `googleIntegration.setAppointmentCalendar`). Ambos:
+1. Persistem o novo valor em `google.integration` no `aionui-config.txt`
+2. Chamam `refreshGoogleMcpEnv()`, que re-grava o bloco env da entrada `aionui-google-integration` em `mcp.config`
+
+Subprocessos MCP recém-lançados pegam o novo `APPOINTMENT_CALENDAR_ID` automaticamente. Sessões Claude em andamento mantêm a env original até o subprocesso MCP reiniciar — tipicamente na próxima mensagem após algum tempo ocioso, ou após o usuário reiniciar o agente.
+
+Resultado: quando o Dr. manda mensagem para si mesmo ("quais consultas eu tenho hoje?"), o Claude chama `google_list_events`, o MCP usa a agenda dedicada (não a primária), e o Dr. vê apenas os agendamentos feitos pela recepcionista — sem expor a agenda pessoal ao LLM.
 
 ### Notificação ao proprietário
 
