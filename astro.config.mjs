@@ -43,6 +43,7 @@ export default defineConfig({
 						{ label: 'Multi-Agent Mode', translations: { 'pt-BR': 'Modo Multi-Agente' }, slug: 'features/multi-agent' },
 						{ label: 'Remote Access (WebUI)', translations: { 'pt-BR': 'Acesso Remoto (WebUI)' }, slug: 'features/webui' },
 						{ label: 'WhatsApp Channel', translations: { 'pt-BR': 'Canal WhatsApp' }, slug: 'features/whatsapp' },
+						{ label: 'Gmail & Calendar Views', translations: { 'pt-BR': 'Gmail e Agenda' }, slug: 'features/google-views' },
 						{ label: 'Scheduled Tasks', translations: { 'pt-BR': 'Tarefas Agendadas' }, slug: 'features/scheduled-tasks' },
 						{ label: 'Document Generation', translations: { 'pt-BR': 'Geração de Documentos' }, slug: 'features/document-generation' },
 						{ label: 'Preview Panel', translations: { 'pt-BR': 'Painel de Visualização' }, slug: 'features/preview-panel' },
@@ -60,7 +61,9 @@ export default defineConfig({
 					label: 'Architecture',
 					translations: { 'pt-BR': 'Arquitetura' },
 					items: [
+						{ label: 'Managed AI Gateway', translations: { 'pt-BR': 'Gateway de IA Gerenciado' }, slug: 'architecture/managed-gateway' },
 						{ label: 'WhatsApp Channel', translations: { 'pt-BR': 'Canal WhatsApp' }, slug: 'architecture/whatsapp' },
+						{ label: 'Gmail & Calendar Views', translations: { 'pt-BR': 'Visualizações Gmail e Agenda' }, slug: 'architecture/google-views' },
 					],
 				},
 				{

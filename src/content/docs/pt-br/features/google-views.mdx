@@ -1,0 +1,68 @@
+---
+title: Gmail e Agenda
+description: Navegue pela sua caixa de entrada do Gmail e pela Google Agenda dentro do ThairaAI e transforme qualquer e-mail em um chat com a IA.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+O ThairaAI inclui visualizações nativas de **Gmail** e **Google Agenda** para você ler e-mails e consultar sua agenda sem sair do app — e transformar qualquer e-mail em uma conversa com a IA com um clique.
+
+Essas visualizações reutilizam a conta Google que você já conectou em **Configurações → Google**. Nenhum login adicional é necessário.
+
+<Aside type="note">
+  As visualizações são **nativas** — elas chamam as APIs do Gmail e da Agenda diretamente e renderizam os dados com a própria interface do ThairaAI. Não são um navegador embutido no estilo `web.whatsapp.com`, porque o Google bloqueia o login de conta dentro de webviews embutidos ("este navegador ou app pode não ser seguro").
+</Aside>
+
+## Pré-requisitos
+
+Conecte sua conta Google primeiro — veja [Configuração OAuth](/pt-br/google/oauth-setup). Uma vez conectada, as visualizações funcionam imediatamente usando os tokens existentes.
+
+Se a conta não estiver conectada, a página mostra um aviso com link para **Configurações → Google**.
+
+## Abrindo as visualizações
+
+Clique no item **Google** no topo da barra lateral. A página abre com duas abas: **Gmail** e **Agenda**.
+
+## Gmail
+
+| Ação | O que acontece |
+|---|---|
+| **Navegar** | Os e-mails mais recentes são listados com remetente, assunto, trecho e data |
+| **Ler** | Clique em qualquer e-mail para abrir a mensagem completa em um painel lateral |
+| **Carregar mais** | Um botão no final da lista busca a próxima página de e-mails |
+
+O corpo dos e-mails é renderizado dentro de um frame totalmente isolado (sandbox), então scripts remotos e pixels de rastreamento em e-mails HTML não conseguem executar.
+
+### Analisar um e-mail com a IA
+
+Cada e-mail tem um botão com o **ícone do Google** (também disponível dentro do painel de leitura). Ao clicar nele:
+
+1. O conteúdo completo do e-mail é buscado
+2. Um novo chat é aberto com o e-mail já preenchido como prompt
+3. Você escolhe seu assistente e envia — a IA então resume, redige uma resposta, extrai itens de ação, ou o que você pedir
+
+<Aside type="tip">
+  Chats iniciados a partir de um e-mail são marcados com o **logo do Gmail** na barra lateral de histórico, para você identificar rapidamente quais conversas são sobre um e-mail.
+</Aside>
+
+## Agenda
+
+A aba Agenda oferece três visualizações:
+
+| Visualização | Mostra |
+|---|---|
+| **Próximos** | Uma lista de agenda dos próximos eventos agrupados por dia |
+| **Semana** | Uma grade de sete dias; cada coluna lista os eventos daquele dia |
+| **Mês** | Uma grade mensal clássica com chips de eventos por dia |
+
+Use as setas **‹ ›** para navegar entre semanas/meses e **Hoje** para voltar à data atual. O dia de hoje fica sempre destacado.
+
+A Agenda usa o calendário configurado em **Configurações → Google** (o calendário de agendamentos), recorrendo ao seu calendário principal quando nenhum estiver definido.
+
+## Privacidade
+
+Todos os dados são buscados sob demanda e renderizados localmente. Nada é armazenado remotamente — e-mails e eventos permanecem na sua sessão local.
+
+---
+
+Para detalhes internos de implementação, veja [Arquitetura das Visualizações de Gmail e Agenda](/pt-br/architecture/google-views).

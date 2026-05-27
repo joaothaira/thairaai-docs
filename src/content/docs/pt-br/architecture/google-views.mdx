@@ -1,0 +1,87 @@
+---
+title: Arquitetura das Visualizações de Gmail e Agenda
+description: Design interno das visualizações nativas de Gmail e Agenda para contribuidores.
+draft: true
+---
+
+Esta página cobre o design interno das visualizações nativas de Gmail e Agenda, o fluxo de "analisar e-mail no chat" e a marcação do Gmail na barra lateral de histórico.
+
+## Por que visualizações nativas via API, e não um webview
+
+A primeira tentativa embutiu `mail.google.com` / `calendar.google.com` via um `<webview>` do Electron, espelhando a aba do WhatsApp Web. O Google bloqueia o login de conta dentro de webviews embutidos (`disallowed_useragent` — "este navegador ou app pode não ser seguro"), independentemente do motor de renderização ou da substituição do user-agent. O WhatsApp Web funciona apenas porque autentica por QR code, nunca por login de conta Google.
+
+O design final descarta o webview e renderiza Gmail/Agenda nativamente, chamando as APIs do Google através da conexão OAuth **existente** em **Configurações → Google** (`GoogleIntegrationService`). Os escopos OAuth já cobrem `gmail.readonly`, `gmail.send` e `calendar`, então não é necessário reconsentir.
+
+## Fluxo de dados
+
+```
+Página do renderer (pages/google)
+  → ipcBridge.googleIntegration.{status, listEmails, getEmail, listEvents}
+  → googleIntegrationBridge (process)
+  → GoogleIntegrationService
+      → getAuthenticatedClient()  # cliente OAuth2 de google-integration-tokens.json
+      → google.gmail(...) / google.calendar(...)
+  → APIs do Google
+```
+
+O processo renderer não guarda tokens nem faz chamadas de rede — tudo passa pela ponte IPC até o processo principal, que detém o cliente OAuth.
+
+## Arquivos-fonte
+
+**Novos arquivos:**
+
+| Arquivo | Função |
+|---|---|
+| `src/renderer/pages/google/index.tsx` | Entrada da página. Busca o `status` de conexão; renderiza `GoogleNotConnected` quando não conectado, caso contrário a estrutura de abas Gmail/Agenda. |
+| `src/renderer/pages/google/GmailView.tsx` | Lista de e-mails paginada. Acúmulo manual de páginas com botão **Carregar mais** (`pageToken`/`nextPageToken`). Abre `GmailMessagePanel`; hospeda a ação "analisar no chat" por linha. |
+| `src/renderer/pages/google/GmailMessagePanel.tsx` | Drawer mostrando o e-mail completo via `getEmail`. Corpos HTML renderizam em um `<iframe sandbox='' srcDoc>` totalmente isolado (sem `allow-scripts`/`allow-same-origin`). Também hospeda um botão "analisar no chat". |
+| `src/renderer/pages/google/CalendarView.tsx` | Agenda com modos `agenda` / `semana` / `mês`, navegação anterior/próximo/hoje e um `fetchWindow()` que mapeia cada modo + data âncora para `timeMin`/`timeMax`/`maxResults`. |
+| `src/renderer/pages/google/CalendarWeekGrid.tsx` | Sete colunas de dia; cada uma lista os eventos daquele dia em ordem de horário. |
+| `src/renderer/pages/google/CalendarMonthGrid.tsx` | Grade mensal clássica de 6 semanas com alguns chips de eventos por dia e `+N`. |
+| `src/renderer/pages/google/GoogleNotConnected.tsx` | Aviso exibido quando a conta não está conectada; com link para `/settings/google`. |
+| `src/renderer/pages/google/helpers.ts` | Formatação de remetente/data, `htmlToText` (somente parsing, via `DOMParser`), `buildEmailAnalysisPrompt` e helpers de data da agenda (`startOfWeek`, `addDays`, `isSameDay`, …). |
+| `src/renderer/components/layout/Sider/SiderNav/SiderGoogleEntry.tsx` | Item de navegação no topo da barra lateral, roteando para `/google`. |
+
+**Arquivos modificados:**
+
+| Arquivo | Mudança |
+|---|---|
+| `src/process/services/google/GoogleIntegrationService.ts` | Adicionado `getEmailDetail(id)` + tipo `GmailMessageDetail` — busca `format: 'full'` e percorre a árvore MIME (`extractBody`, prefere `text/html` depois `text/plain`, decodificado em base64url). `listEmails(maxResults, pageToken?)` agora retorna `{ messages, nextPageToken }`. `listEvents(maxResults, calendarId, timeMin?, timeMax?)` aceita uma janela de tempo explícita. |
+| `src/process/bridge/googleIntegrationBridge.ts` | Adicionado o provider `getEmail`. `listEmails` repassa `pageToken`/`nextPageToken`. `listEvents` resolve o `appointmentCalendarId` configurado em `google.integration` (fallback `primary`) quando o renderer não fixa um calendário. |
+| `src/common/adapter/ipcBridge.ts` | Bloco `googleIntegration`: adicionado `getEmail`; estendidos `listEmails` (param `pageToken`, dado `nextPageToken`) e `listEvents` (`timeMin`/`timeMax`). Adicionado `origin?: string` a `ICreateConversationParams['extra']`. |
+| `src/process/agent/gemini/cli/tools/google-integration.ts` | Atualizado o chamador de `listEmails` para o novo formato de retorno `{ messages }`. |
+| `src/renderer/components/layout/Router.tsx` | Registrada a rota `/google`. |
+| `src/renderer/components/layout/Sider/index.tsx` + `SiderNav/index.ts` | Integração do `SiderGoogleEntry` e seu handler de navegação. |
+| `src/renderer/pages/guid/GuidPage.tsx` | Preenche o rascunho de entrada a partir de `location.state.initialInput`; passa `messageOrigin` (`location.state.origin`) para o `useGuidSend`. |
+| `src/renderer/pages/guid/hooks/useGuidSend.ts` | Nova dependência `messageOrigin`; carimba `extra.origin` na conversa criada em todos os backends (gemini/acp/aionrs/openclaw/nanobot). |
+| `src/renderer/pages/conversation/GroupedHistory/ConversationRow.tsx` | `renderLeadingIcon`: mostra o logo do Gmail quando `extra.origin === 'gmail'`, ao lado do ramo existente `wa-` do WhatsApp. |
+| `src/renderer/assets/icons/gmail_icon.webp` + `src/renderer/types.d.ts` | Asset do logo do Gmail + declaração de módulo `*.webp`. |
+| `src/renderer/services/i18n/locales/{en-US,pt-BR}/common.json` | Chaves para navegação, rótulos das abas, estados vazio/erro/não-conectado, rótulos de período, `loadMore`, `allDay`, `today` e o prompt de análise de e-mail. |
+
+## Decisões de design
+
+### Leitura completa de e-mail e segurança de HTML
+
+`getEmailDetail` retorna o corpo decodificado mais um flag `isHtml`. O `GmailMessagePanel` renderiza corpos HTML dentro de `<iframe sandbox='' srcDoc={body}>`. O atributo `sandbox` vazio desabilita scripts, acesso same-origin, envio de formulários e popups — a forma padrão e segura de exibir HTML de e-mail não confiável sem depender do DOMPurify. Corpos em texto puro renderizam em um bloco `<pre>`.
+
+### Paginação de e-mails
+
+`listEmails` aceita um `pageToken` e retorna `nextPageToken` da resposta `messages.list` do Gmail. O `GmailView` mantém os `messages` acumulados em estado local e anexa a próxima página em **Carregar mais**; o refresh reinicia na primeira página.
+
+### Janela da agenda e calendário configurado
+
+`CalendarView.fetchWindow()` deriva `timeMin`/`timeMax` do modo ativo e da data âncora (semana = domingo–sábado da âncora; mês = a grade visível de 6 semanas). O renderer não passa um `calendarId`; a ponte resolve o `appointmentCalendarId` configurado para que as visualizações respeitem o calendário escolhido em **Configurações → Google** em vez de sempre consultar o `primary`.
+
+### E-mail → chat
+
+A ação "analisar no chat" busca o e-mail completo, monta um prompt com `buildEmailAnalysisPrompt` (HTML convertido para texto) e navega para a página de novo chat:
+
+```ts
+navigate('/guid', { state: { initialInput: prompt, origin: 'gmail' } });
+```
+
+O `GuidPage` preenche o rascunho a partir de `location.state.initialInput` (o usuário revisa, escolhe um assistente e envia — reutilizando todo o pipeline de criação de conversa em vez de fixar um backend). O `useGuidSend` lê `location.state.origin` e carimba `extra.origin = 'gmail'` na conversa criada em todos os ramos de backend.
+
+### Marcação do Gmail na barra lateral
+
+`ConversationRow.renderLeadingIcon` verifica `(conversation.extra as { origin?: string })?.origin === 'gmail'` e renderiza a imagem do logo do Gmail — espelhando o ramo existente `conversation.name?.startsWith('wa-')` do WhatsApp. Um marcador em `extra` é usado em vez de um prefixo no nome porque o nome da conversa é renderizado cru na barra lateral, no cabeçalho do chat e em tooltips; um prefixo poluiria o título visível em todos os lugares, enquanto `extra` persiste no banco de dados e sobrevive a qualquer renomeação.

@@ -1,0 +1,68 @@
+---
+title: Gmail & Calendar Views
+description: Browse your Gmail inbox and Google Calendar inside ThairaAI, and turn any email into an AI chat.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+ThairaAI includes native **Gmail** and **Google Calendar** views so you can read mail and check your schedule without leaving the app — and turn any email into an AI conversation with one click.
+
+These views reuse the Google account you already connected in **Settings → Google**. No extra login is required.
+
+<Aside type="note">
+  The views are **native** — they call the Gmail and Calendar APIs directly and render the data with ThairaAI's own UI. They are not an embedded `web.whatsapp.com`-style browser, because Google blocks account sign-in inside embedded webviews ("this browser or app may not be secure").
+</Aside>
+
+## Prerequisites
+
+Connect your Google account first — see [OAuth Setup](/en/google/oauth-setup). Once connected, the views work immediately using the existing tokens.
+
+If the account is not connected, the page shows a prompt linking to **Settings → Google**.
+
+## Opening the views
+
+Click the **Google** entry at the top of the sidebar. The page opens with two tabs: **Gmail** and **Calendar**.
+
+## Gmail
+
+| Action | What happens |
+|---|---|
+| **Browse** | The most recent emails are listed with sender, subject, snippet, and date |
+| **Read** | Click any email to open the full message in a side panel |
+| **Load more** | A button at the bottom of the list fetches the next page of emails |
+
+Email bodies are rendered inside a fully sandboxed frame, so remote scripts and tracking pixels in HTML emails cannot run.
+
+### Analyze an email with AI
+
+Each email has a **Google icon** button (also available inside the open-email panel). Clicking it:
+
+1. Fetches the full email content
+2. Opens a new chat with the email already pre-filled as the prompt
+3. Lets you pick your assistant and send — the AI then summarizes, drafts a reply, extracts action items, or whatever you ask
+
+<Aside type="tip">
+  Chats started from an email are marked with the **Gmail logo** in the chat-history sidebar, so you can tell at a glance which conversations are about an email.
+</Aside>
+
+## Calendar
+
+The Calendar tab offers three views:
+
+| View | Shows |
+|---|---|
+| **Upcoming** | An agenda list of upcoming events grouped by day |
+| **Week** | A seven-day grid; each column lists that day's events |
+| **Month** | A classic month grid with event chips per day |
+
+Use the **‹ ›** arrows to move between weeks/months, and **Today** to jump back to the current date. Today is always highlighted.
+
+The Calendar uses the calendar configured in **Settings → Google** (the appointment calendar), falling back to your primary calendar when none is set.
+
+## Privacy
+
+All data is fetched on demand and rendered locally. Nothing is stored remotely — emails and events stay in your local session.
+
+---
+
+For internal implementation details, see [Gmail & Calendar Views Architecture](/en/architecture/google-views).

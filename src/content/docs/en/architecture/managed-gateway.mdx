@@ -1,0 +1,168 @@
+---
+title: Managed AI Gateway
+description: Centralized AI API-key management for ThairaAI's managed-SaaS model — gateway, auth, metering, and desktop integration.
+---
+
+This page documents the architecture and decisions behind ThairaAI's **managed-SaaS** model, where all AI calls route through a centralized, authenticated, metered cloud gateway instead of each user supplying their own provider keys.
+
+## Why
+
+Historically ThairaAI is a free desktop app where each user pastes their own provider keys (`IProvider.apiKey`, stored locally) and every AI call goes straight from the desktop to the provider. The managed-SaaS model pivots this for small/medium companies:
+
+- ThairaAI holds the AI credentials centrally; users never see a provider key.
+- Companies pay a subscription; usage is **metered and capped per company**.
+- All AI traffic flows through one cloud gateway we control.
+
+## Locked decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Key ownership | ThairaAI-provided (managed SaaS) | We hold credentials; usage metered + capped per company |
+| Tenancy | Single multi-tenant gateway on GCP Cloud Run | Cheapest to operate, scales cleanly |
+| Auth | Firebase Authentication (Google + email/password + future SSO) | Serves Google AND non-Google (Microsoft 365) companies without us owning password security |
+| Upstream engine | **OpenRouter** for MVP | Zero infra, $0 when idle, returns **real cost per request**. 9router (self-hosted, subscription-arbitrage margin) is a later swap — the gateway's upstream is a config seam |
+
+## Architecture
+
+```
+ThairaAI desktop ──(1 Firebase sign-in)──► Firebase Auth ──► ID token (JWT, ~1h)
+       │
+       │ (2) /v1/* call, Bearer <Firebase ID token>, OpenAI-compatible
+       ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Thaira Gateway  (Cloud Run, stateless, scales 0→N)            │
+│  verify JWT → resolve user→company→plan → (quota) →            │
+│  forward → meter usage + real cost                             │
+│  Cloud SQL (Postgres): companies, users, usage_events          │
+└───────────────┬────────────────────────────────────────────────┘
+                │ (3) Bearer <upstream key>
+                ▼
+        OpenRouter ──► providers (Anthropic, OpenAI, Gemini, …)
+
+Stripe ──(webhook)──► Gateway: update company plan/status (flat tiers)
+```
+
+The gateway is **upstream-agnostic**: pointing it at OpenRouter vs a self-hosted 9router is a config change (`UPSTREAM_URL` / `UPSTREAM_API_KEY`), not a code change.
+
+## Components
+
+| Component | Responsibility | Runtime |
+|---|---|---|
+| **Thaira Gateway** | Verify Firebase JWT, resolve tenant, forward to upstream, meter tokens + real cost | Node 22 + TypeScript + Hono, Cloud Run |
+| **Cloud SQL (Postgres)** | Source of truth: companies, users, entitlements, usage | Cloud SQL (reuse `neo-thairahub`) |
+| **OpenRouter** | OpenAI-compatible upstream; routing/fallback across providers; returns real cost | Managed (external) |
+| **Firebase Auth** | Identity (Google + email/password + SSO), issues ID tokens | Managed (GCP) |
+| **Secret Manager** | Upstream key, DB URL, Firebase admin creds | GCP |
+| **Stripe** | Per-company subscription (flat tiers); webhook drives plan/status | Managed |
+
+## Auth flow
+
+The desktop drives Firebase auth from the **main process** via the Identity Toolkit REST API (no web SDK — Electron-friendly):
+
+1. User signs in (email/password; Google/SSO later) → Firebase returns an ID token + refresh token.
+2. The refresh token is stored **encrypted** (Electron `safeStorage`); the short-lived ID token stays in memory and is auto-refreshed (~1h) on demand.
+3. Each gateway request carries `Authorization: Bearer <ID token>`.
+4. The gateway verifies the token (signature + `aud` + `exp`) via the Firebase Admin SDK, then maps `firebase_uid → user → company → plan`.
+
+## Data model (Cloud SQL / Postgres)
+
+- `companies` — `id, name, stripe_customer_id, plan, status, created_at`
+- `users` — `id, firebase_uid (unique), email, company_id, role, status`
+- `plan_limits` — `plan, monthly_token_cap, monthly_cost_cap (USD), rps_limit, allowed_models[]` (any field `NULL` = unlimited)
+- `usage_events` — append-only: `company_id, user_id, model, endpoint, input_tokens, output_tokens, cost_usd, status_code, ts` (no prompt/response content)
+- `usage_counters` — per-period rollup: `company_id, period, tokens_used, cost_usd, requests`
+
+Phase-1 onboarding: invite-based, with optional email-domain auto-join; a personal company is created per user otherwise.
+
+## Metering (real cost)
+
+The gateway injects `usage: { include: true }` (and `stream_options.include_usage` for streams) so OpenRouter returns the **actual USD cost per request** plus token counts.
+
+- **Non-streaming:** the response is buffered and `usage` parsed (`prompt/completion_tokens` + `cost`).
+- **Streaming:** the upstream body is `tee()`'d — one branch streams to the client unchanged (no added latency), the other is scanned for the final usage chunk (which carries `cost`).
+- Stored in `usage_events.cost_usd` and summed into `usage_counters.cost_usd`. Metering is best-effort and never breaks the user's request. No prompt/response content is stored.
+
+OpenRouter's `usage` object (verified against live API):
+
+```json
+{ "prompt_tokens": 13, "completion_tokens": 6, "total_tokens": 19, "cost": 0.00000555,
+  "cost_details": { "upstream_inference_cost": 0.00000555 } }
+```
+
+Per-request costs are ~`1e-6` USD, so `cost_usd` columns use `NUMERIC(_, 8)` scale.
+
+## Plan enforcement
+
+Each plan's entitlements live in `plan_limits`; the resolved tenant carries them through the request. Enforcement is layered onto the request path:
+
+- **Monthly cost / token cap** — `enforceQuota` runs before the AI-call routes and compares the current period's `usage_counters` rollup against the plan's `monthly_cost_cap` (USD) / `monthly_token_cap`. Over the cap returns **402** with the used-vs-limit amounts (USD **and** R$). This is a pre-request check against the durable counter; since usage is recorded after each response, a request in flight can push slightly past the cap — an accepted small overage that the Redis track will tighten with atomic pre-decrement.
+- **Model allow-list** — a request for a model outside the plan's `allowed_models` is rejected with **403**; `GET /v1/models` is filtered to the same allow-list so the desktop only offers usable models. `NULL` allows every model.
+- **RPS limit** — `rps_limit` is stored but enforced in the Redis (Memorystore) track, not in-process.
+
+`GET /v1/usage` returns the current period's tokens, `cost_usd`, the R$ estimate, the plan caps (USD + R$), and the live FX rate — the desktop reads it to show a company its consumption.
+
+## Currency (R$ estimates)
+
+Cost is stored and capped in **USD** — it is exactly what OpenRouter charges, so it stays the immutable source of truth and protects margin against FX swings. Because most customers are Brazilian, every place a cost is surfaced (the 402 cap message, `/v1/usage`) also carries an **R$ estimate**.
+
+The USD→BRL rate is fetched live from a keyless FX API (default [open.er-api.com](https://www.exchangerate-api.com/docs/free); the parser also accepts AwesomeAPI's shape), cached in memory, and refreshed hourly in the background. A failed fetch keeps the last good value and ultimately falls back to a static `USD_BRL_RATE` env, so a currency-API blip never breaks a request. No BRL is persisted — estimates are recomputed on read at the current rate.
+
+> **Cloud note:** AwesomeAPI's free tier returns `429` from Cloud Run's shared egress IPs (it works from residential IPs), so the default source is `open.er-api.com`, which tolerates datacenter IPs. The source is the `FX_API_URL` env, swappable without code changes.
+
+## Billing (Stripe)
+
+Flat subscription tiers: each plan maps to a Stripe Price (`plan_limits.stripe_price_id`); the plan's cost cap enforces fair use, so a customer pays a fixed monthly amount (in R$) regardless of usage up to the cap. No card data touches the gateway — Checkout and the Customer Portal are Stripe-hosted.
+
+- **`POST /v1/billing/checkout`** `{ plan }` → ensures a Stripe Customer for the company (created + persisted on first use), creates a subscription Checkout Session, returns its hosted `url`. The desktop opens it in the browser.
+- **`POST /v1/billing/portal`** → returns a Customer Portal `url` to manage/cancel the subscription.
+- **`POST /webhooks/stripe`** (public, **outside** the `/v1` auth gate; authenticated by the Stripe signature over the raw body) is the source of truth for `companies.plan` / `status`. It handles `customer.subscription.created|updated|deleted` (price → plan, status mapped to `active`/`past_due`/`canceled`, `stripe_subscription_id` recorded) and `invoice.payment_failed` (→ `past_due`). Handlers are idempotent so a `500` safely triggers Stripe's retry.
+
+The gateway boots fine without Stripe configured (`config.stripe.enabled` is false when the secret/webhook env are absent); the billing routes then return `503`.
+
+## Desktop integration
+
+The desktop was already "gateway-ready" (`IProvider` carries `baseUrl` + `apiKey`, with an `isGateway` flag). The managed model adds:
+
+- **`cloudAuth` IPC bridge** + `CloudAuthService` (`src/process/services/cloudAuth/`) — Firebase sign-in/up, encrypted token storage, auto-refresh.
+- **Process-side token injection** — `applyGatewayAuthIfNeeded()` at the top of `GeminiAgent.initialize()`: when the selected provider `isGateway`, it fetches a fresh token and re-runs `initClientEnv()` so `OPENAI_API_KEY` carries it. One chokepoint, no stale tokens, nothing persisted in config.
+- **Auto-provisioned provider** — on sign-in, a built-in `Thaira` gateway provider (`baseUrl = THAIRA_GATEWAY_URL`, models from `/v1/models`) is created/refreshed and enabled; disabled on sign-out.
+- **Sign-in UI** — a "Thaira Account" tab in Settings (`CloudAccountModalContent.tsx`).
+
+**Desktop env required for live use** (`.env`):
+
+- `THAIRA_GATEWAY_URL` — gateway base URL (local dev: `http://localhost:8080`; later the Cloud Run URL).
+- `FIREBASE_WEB_API_KEY` — a project key **without a referer restriction** (the auto-created Firebase browser key is referer-locked and is blocked from Electron).
+
+## Deployment
+
+**Live:** `https://thaira-gateway-714687354180.southamerica-east1.run.app` (project `thaira`, region `southamerica-east1`).
+
+- **Gateway** → Cloud Run (stateless, scales 0→N, `--max-instances 5`). Secrets `openrouter-api-key` + `gateway-db-url` in Secret Manager; runtime SA has `secretmanager.secretAccessor` on both + `cloudsql.client`. Firebase Admin uses the SA via Application Default Credentials (no key file in the image).
+- **Database** → reuses the Cloud SQL instance `neo-thairahub` (Postgres 15) with an isolated database `thaira_gateway` + user `gateway_app` (no new instance cost), reached through the Cloud SQL connector socket `/cloudsql/thaira:southamerica-east1:neo-thairahub`.
+- **Migrations** → run via the Cloud SQL Auth Proxy before first traffic (`001`–`003` applied).
+- **Health** → `GET /health` (not `/healthz` — Google Front End intercepts that path prefix on `*.run.app`).
+- For SMB privacy, configure OpenRouter data-retention / zero-data-retention provider preferences.
+
+## Security
+
+- The upstream key lives **only** in the gateway (Secret Manager) — never in the desktop build.
+- Firebase JWT verified (signature + audience + expiry) on every request.
+- No prompt/response logging — privacy for SMB customers.
+- Per-company monthly cost/token caps + per-plan model allow-list enforced in-gateway protect against runaway cost. Per-company RPS rate limiting comes with the Redis track.
+
+## Implementation status
+
+**Done & verified (local end-to-end against live OpenRouter + Firebase + Postgres):**
+
+- Gateway: auth → tenant resolution → forward → real-cost metering. Endpoints `/health`, `/v1/chat/completions`, `/v1/messages`, `/v1/models`, `/v1/usage`.
+- Plan enforcement: monthly cost/token cap (402), per-plan model allow-list (403 + filtered `/v1/models`), `/v1/usage` reporting, USD→BRL live FX with R$ estimates. Verified against live AwesomeAPI + Postgres.
+- Desktop: `cloudAuth` bridge + service, process-side token injection, auto-provisioned `Thaira` provider, "Thaira Account" sign-in UI with usage card (tokens + R$/US$ + cap), en + pt-BR.
+- **Deployed to Cloud Run** (`southamerica-east1`, project `thaira`) on Cloud SQL `neo-thairahub` / DB `thaira_gateway`. **Full e2e verified live:** Firebase sign-in → tenant provisioned in Postgres → `/v1/chat/completions` to OpenRouter (real cost recorded) → `/v1/usage` with live R$. Desktop wired (`THAIRA_GATEWAY_URL` + a dedicated API-restricted `FIREBASE_WEB_API_KEY`).
+- **Stripe billing (flat tiers)**: `/v1/billing/checkout` + `/v1/billing/portal` (hosted Checkout / Customer Portal) and the `/webhooks/stripe` reconciler are deployed and **verified in sandbox** (checkout URL → subscription → webhook set `plan=starter, status=active`; portal URL returned). Desktop "Thaira Account" tab has Upgrade (Starter/Pro) + Manage-billing buttons.
+
+**Pending:**
+
+- Go-live: swap the sandbox Stripe secret/webhook for live keys + a live webhook endpoint; create the live products/prices.
+- **Phase 2:** Redis (Memorystore) RPS rate-limit + atomic quota pre-decrement.
+- Decide the `free` plan's limits (currently unlimited — monetization needs a cap or gated access).
+- Optional later swap/hybrid: self-hosted 9router behind the gateway for subscription-arbitrage margin.

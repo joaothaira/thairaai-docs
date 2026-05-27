@@ -1,0 +1,133 @@
+---
+title: Gateway de IA Gerenciado
+description: Gerenciamento centralizado de chaves de API de IA no modelo SaaS gerenciado da ThairaAI — gateway, autenticação, medição e integração com o desktop.
+---
+
+Esta página documenta a arquitetura e as decisões por trás do modelo **SaaS gerenciado** da ThairaAI, no qual todas as chamadas de IA passam por um gateway de nuvem centralizado, autenticado e medido — em vez de cada usuário fornecer suas próprias chaves de provedor.
+
+## Por quê
+
+Historicamente a ThairaAI é um app desktop gratuito em que cada usuário cola suas próprias chaves de provedor (`IProvider.apiKey`, armazenadas localmente) e cada chamada de IA vai direto do desktop ao provedor. O modelo SaaS gerenciado muda isso para pequenas e médias empresas:
+
+- A ThairaAI mantém as credenciais de IA centralmente; usuários nunca veem uma chave de provedor.
+- Empresas pagam uma assinatura; o uso é **medido e limitado por empresa**.
+- Todo o tráfego de IA passa por um único gateway de nuvem sob nosso controle.
+
+## Decisões definidas
+
+| Decisão | Escolha | Justificativa |
+|---|---|---|
+| Propriedade das chaves | Fornecidas pela ThairaAI (SaaS gerenciado) | Nós mantemos as credenciais; uso medido + limitado por empresa |
+| Multilocação | Gateway único multi-tenant no GCP Cloud Run | Operação mais barata, escala de forma limpa |
+| Autenticação | Firebase Authentication (Google + e-mail/senha + SSO futuro) | Atende empresas com e sem Google (Microsoft 365) sem assumirmos a segurança de senhas |
+| Motor upstream | **OpenRouter** no MVP | Zero infra, $0 ocioso, retorna o **custo real por requisição**. O 9router (auto-hospedado, margem por arbitragem de assinaturas) é uma troca futura — o upstream do gateway é uma costura de configuração |
+
+## Arquitetura
+
+```
+desktop ThairaAI ──(1 login Firebase)──► Firebase Auth ──► ID token (JWT, ~1h)
+       │
+       │ (2) chamada /v1/*, Bearer <ID token Firebase>, compatível com OpenAI
+       ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Thaira Gateway  (Cloud Run, stateless, escala 0→N)           │
+│  verifica JWT → resolve usuário→empresa→plano → (cota) →       │
+│  encaminha → mede uso + custo real                            │
+│  Cloud SQL (Postgres): companies, users, usage_events          │
+└───────────────┬────────────────────────────────────────────────┘
+                │ (3) Bearer <chave do upstream>
+                ▼
+        OpenRouter ──► provedores (Anthropic, OpenAI, Gemini, …)
+
+Stripe ──(webhook)──► Gateway: atualiza plano/permissões da empresa   [Fase 2]
+```
+
+O gateway é **agnóstico ao upstream**: apontá-lo para o OpenRouter ou para um 9router auto-hospedado é uma mudança de configuração (`UPSTREAM_URL` / `UPSTREAM_API_KEY`), não de código.
+
+## Componentes
+
+| Componente | Responsabilidade | Runtime |
+|---|---|---|
+| **Thaira Gateway** | Verificar o JWT do Firebase, resolver o tenant, encaminhar ao upstream, medir tokens + custo real | Node 22 + TypeScript + Hono, Cloud Run |
+| **Cloud SQL (Postgres)** | Fonte de verdade: empresas, usuários, permissões, uso | Cloud SQL (reutilizar `neo-thairahub`) |
+| **OpenRouter** | Upstream compatível com OpenAI; roteamento/fallback entre provedores; retorna custo real | Gerenciado (externo) |
+| **Firebase Auth** | Identidade (Google + e-mail/senha + SSO), emite ID tokens | Gerenciado (GCP) |
+| **Secret Manager** | Chave do upstream, URL do banco, credenciais do Firebase Admin | GCP |
+| **Stripe** *(Fase 2)* | Assinatura por empresa + cobrança por uso | Gerenciado |
+
+## Fluxo de autenticação
+
+O desktop conduz a autenticação Firebase a partir do **processo principal** via API REST do Identity Toolkit (sem o SDK web — adequado ao Electron):
+
+1. O usuário entra (e-mail/senha; Google/SSO depois) → o Firebase retorna um ID token + refresh token.
+2. O refresh token é armazenado **criptografado** (`safeStorage` do Electron); o ID token de curta duração fica em memória e é renovado automaticamente (~1h) sob demanda.
+3. Cada requisição ao gateway leva `Authorization: Bearer <ID token>`.
+4. O gateway verifica o token (assinatura + `aud` + `exp`) via Firebase Admin SDK e mapeia `firebase_uid → usuário → empresa → plano`.
+
+## Modelo de dados (Cloud SQL / Postgres)
+
+- `companies` — `id, name, stripe_customer_id, plan, status, created_at`
+- `users` — `id, firebase_uid (único), email, company_id, role, status`
+- `plan_limits` — `plan, monthly_token_cap, rps_limit, allowed_models[]`
+- `usage_events` — somente-inclusão: `company_id, user_id, model, endpoint, input_tokens, output_tokens, cost_usd, status_code, ts` (sem conteúdo de prompt/resposta)
+- `usage_counters` — agregado por período: `company_id, period, tokens_used, cost_usd, requests`
+
+Onboarding da Fase 1: por convite, com adesão automática opcional por domínio de e-mail; caso contrário, uma empresa pessoal é criada por usuário.
+
+## Medição (custo real)
+
+O gateway injeta `usage: { include: true }` (e `stream_options.include_usage` para streams) para que o OpenRouter retorne o **custo real em USD por requisição** além das contagens de tokens.
+
+- **Sem streaming:** a resposta é bufferizada e o `usage` é parseado (`prompt/completion_tokens` + `cost`).
+- **Com streaming:** o corpo do upstream é duplicado com `tee()` — um ramo transmite ao cliente sem alteração (sem latência extra), o outro é varrido pelo chunk final de `usage` (que carrega o `cost`).
+- Armazenado em `usage_events.cost_usd` e somado em `usage_counters.cost_usd`. A medição é best-effort e nunca quebra a requisição do usuário. Nenhum conteúdo de prompt/resposta é armazenado.
+
+Objeto `usage` do OpenRouter (verificado contra a API real):
+
+```json
+{ "prompt_tokens": 13, "completion_tokens": 6, "total_tokens": 19, "cost": 0.00000555,
+  "cost_details": { "upstream_inference_cost": 0.00000555 } }
+```
+
+Custos por requisição são da ordem de `1e-6` USD, então as colunas `cost_usd` usam escala `NUMERIC(_, 8)`.
+
+## Integração com o desktop
+
+O desktop já estava "pronto para gateway" (`IProvider` carrega `baseUrl` + `apiKey`, com a flag `isGateway`). O modelo gerenciado adiciona:
+
+- **Bridge IPC `cloudAuth`** + `CloudAuthService` (`src/process/services/cloudAuth/`) — login/cadastro Firebase, armazenamento criptografado do token, renovação automática.
+- **Injeção de token no lado do processo** — `applyGatewayAuthIfNeeded()` no início de `GeminiAgent.initialize()`: quando o provedor selecionado é `isGateway`, busca um token novo e reexecuta `initClientEnv()` para que `OPENAI_API_KEY` o carregue. Um único ponto de injeção, sem tokens obsoletos, nada persistido na config.
+- **Provedor provisionado automaticamente** — no login, um provedor de gateway embutido `Thaira` (`baseUrl = THAIRA_GATEWAY_URL`, modelos de `/v1/models`) é criado/atualizado e habilitado; desabilitado no logout.
+- **UI de login** — uma aba "Thaira Account" em Configurações (`CloudAccountModalContent.tsx`).
+
+**Variáveis de ambiente do desktop para uso real** (`.env`):
+
+- `THAIRA_GATEWAY_URL` — URL base do gateway (dev local: `http://localhost:8080`; depois a URL do Cloud Run).
+- `FIREBASE_WEB_API_KEY` — uma chave do projeto **sem restrição de referer** (a chave de navegador criada automaticamente pelo Firebase é restrita por referer e é bloqueada no Electron).
+
+## Implantação
+
+- **Gateway** → Cloud Run em `southamerica-east1` (stateless, escala 0→N). Segredos (`UPSTREAM_API_KEY`, `DATABASE_URL`) no Secret Manager. O Firebase Admin usa a service account via Application Default Credentials (sem arquivo de chave na imagem).
+- **Banco de dados** → reutilizar a instância Cloud SQL existente `neo-thairahub` (Postgres 15) com um **banco + usuário novos e isolados** para o gateway (sem custo de nova instância).
+- **Migrações** → rodar `npm run migrate` uma vez antes do primeiro tráfego.
+- Para privacidade de PMEs, configurar as preferências de retenção de dados / retenção zero do OpenRouter por provedor.
+
+## Segurança
+
+- A chave do upstream existe **apenas** no gateway (Secret Manager) — nunca no build do desktop.
+- JWT do Firebase verificado (assinatura + audience + expiração) em cada requisição.
+- Sem registro de prompt/resposta — privacidade para clientes PME.
+- Limites de taxa por empresa + por usuário (Fase 2) protegem contra abuso e custos descontrolados.
+
+## Status da implementação
+
+**Pronto e verificado (ponta a ponta localmente, contra OpenRouter + Firebase + Postgres reais):**
+
+- Gateway: autenticação → resolução de tenant → encaminhamento → medição de custo real. Endpoints `/healthz`, `/v1/chat/completions`, `/v1/messages`, `/v1/models`.
+- Desktop: bridge + serviço `cloudAuth`, injeção de token no lado do processo, provedor `Thaira` provisionado automaticamente, UI de login "Thaira Account" (en + pt-BR).
+
+**Pendente:**
+
+- Implantar o gateway no Cloud Run + provisionar o banco dedicado no `neo-thairahub`.
+- **Fase 2:** cota/limite de taxa com Redis (Memorystore); cobrança de assinatura via Stripe sobre o `cost_usd` capturado; lista de modelos permitidos por plano em `/v1/models`.
+- Troca/híbrido futuro opcional: 9router auto-hospedado atrás do gateway para margem por arbitragem de assinaturas.
