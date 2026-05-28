@@ -100,6 +100,15 @@ O desktop já estava "pronto para gateway" (`IProvider` carrega `baseUrl` + `api
 - **Provedor provisionado automaticamente** — no login, um provedor de gateway embutido `Thaira` (`baseUrl = THAIRA_GATEWAY_URL`, modelos de `/v1/models`) é criado/atualizado e habilitado; desabilitado no logout.
 - **UI de login** — uma aba "Thaira Account" em Configurações (`CloudAccountModalContent.tsx`).
 
+### Canais (WhatsApp / Telegram)
+
+As respostas de modo-negócio dos canais são **exclusivamente via gateway** — BYOK e provedores locais nunca são usados ali, então toda mensagem de WhatsApp/Telegram é medida e limitada como qualquer outra chamada ao gateway.
+
+- **`GatewayDirectAgent`** (`src/process/task/directAgent/`) é o agente de resposta dos canais: um agente leve, sem CLI, que fala `/v1/chat/completions` compatível com OpenAI ao gateway com um token Firebase novo. É uma porta comportamento-por-comportamento do `GeminiDirectAgent` nativo (BYOK) — mesma persona de recepcionista, streaming e function-calling do Google Calendar (que funciona pelo protocolo de tools da OpenAI). A fábrica de agentes o escolhe sempre que o modelo da conversa é `isGateway`.
+- **Resolução de modelo** — `getChannelDefaultModel()` / `resolveChannelGatewayModel()` sempre retornam o provedor de gateway gerenciado. O modelo é a escolha explícita do usuário para o canal, ou `DEFAULT_CHANNEL_MODEL` (um padrão de baixo custo) quando nada foi definido. Deslogado, retornam um placeholder para que o agente mostre uma mensagem clara de "entre na Thaira" em vez de cair silenciosamente em uma chave BYOK.
+- **Modelo sempre atual** — uma conversa de canal do tipo `gemini` re-resolve seu modelo a partir do padrão salvo do canal a cada mensagem, então uma troca de modelo em Configurações (ou no cabeçalho do chat) passa a valer imediatamente e conversas legadas migram de qualquer modelo obsoleto/BYOK.
+- **Seletores exclusivos de gateway** — os seletores de modelo de WhatsApp/Telegram (Configurações **e** o cabeçalho do chat) são filtrados para mostrar apenas modelos do gateway; selecionar um o persiste como padrão do canal. O seletor lê `/v1/models` com o token Firebase e cai de volta para a lista populada no login, então um usuário logado sempre vê os modelos do gateway.
+
 **Variáveis de ambiente do desktop para uso real** (`.env`):
 
 - `THAIRA_GATEWAY_URL` — URL base do gateway (dev local: `http://localhost:8080`; depois a URL do Cloud Run).
@@ -125,6 +134,7 @@ O desktop já estava "pronto para gateway" (`IProvider` carrega `baseUrl` + `api
 
 - Gateway: autenticação → resolução de tenant → encaminhamento → medição de custo real. Endpoints `/healthz`, `/v1/chat/completions`, `/v1/messages`, `/v1/models`.
 - Desktop: bridge + serviço `cloudAuth`, injeção de token no lado do processo, provedor `Thaira` provisionado automaticamente, UI de login "Thaira Account" (en + pt-BR).
+- Canais: respostas de modo-negócio de WhatsApp + Telegram roteadas pelo gateway via `GatewayDirectAgent` (compatível com OpenAI, token novo), seleção de modelo exclusiva do gateway com padrão de baixo custo e resolução sempre-atual a cada mensagem. Verificado de ponta a ponta, incluindo chamadas de tool do Google Calendar.
 
 **Pendente:**
 

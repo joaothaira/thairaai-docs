@@ -128,6 +128,15 @@ The desktop was already "gateway-ready" (`IProvider` carries `baseUrl` + `apiKey
 - **Auto-provisioned provider** — on sign-in, a built-in `Thaira` gateway provider (`baseUrl = THAIRA_GATEWAY_URL`, models from `/v1/models`) is created/refreshed and enabled; disabled on sign-out.
 - **Sign-in UI** — a "Thaira Account" tab in Settings (`CloudAccountModalContent.tsx`).
 
+### Channels (WhatsApp / Telegram)
+
+Channel business-mode replies are **gateway-only** — BYOK and local providers are never used there, so every WhatsApp/Telegram message is metered and capped like any other gateway call.
+
+- **`GatewayDirectAgent`** (`src/process/task/directAgent/`) is the channel reply agent: a lightweight, no-CLI agent that talks OpenAI-compatible `/v1/chat/completions` to the gateway with a fresh Firebase token. It is a behavior-for-behavior port of the BYOK Gemini-native `GeminiDirectAgent` — same receptionist persona, streaming, and Google Calendar function-calling (which works over the OpenAI tool protocol). The agent factory picks it whenever the conversation's model `isGateway`.
+- **Model resolution** — `getChannelDefaultModel()` / `resolveChannelGatewayModel()` always return the managed gateway provider. The model is the user's explicit per-channel choice, or `DEFAULT_CHANNEL_MODEL` (a low-cost default) when none is set. Signed out, they return a placeholder so the agent surfaces a clear "sign in to Thaira" message instead of silently falling back to a key.
+- **Always-current model** — a `gemini`-type channel conversation re-resolves its model from the saved channel default on every message, so a model change in Settings (or the chat header) takes effect immediately and legacy conversations migrate off any stale/BYOK model.
+- **Gateway-only pickers** — the WhatsApp/Telegram model selectors (Settings **and** the in-conversation chat header) are filtered to gateway models only; selecting one persists it as the channel default. The picker reads `/v1/models` with the Firebase token and falls back to the sign-in–populated list, so a signed-in user always sees the gateway models.
+
 **Desktop env required for live use** (`.env`):
 
 - `THAIRA_GATEWAY_URL` — gateway base URL (local dev: `http://localhost:8080`; later the Cloud Run URL).
@@ -157,6 +166,7 @@ The desktop was already "gateway-ready" (`IProvider` carries `baseUrl` + `apiKey
 - Gateway: auth → tenant resolution → forward → real-cost metering. Endpoints `/health`, `/v1/chat/completions`, `/v1/messages`, `/v1/models`, `/v1/usage`.
 - Plan enforcement: monthly cost/token cap (402), per-plan model allow-list (403 + filtered `/v1/models`), `/v1/usage` reporting, USD→BRL live FX with R$ estimates. Verified against live AwesomeAPI + Postgres.
 - Desktop: `cloudAuth` bridge + service, process-side token injection, auto-provisioned `Thaira` provider, "Thaira Account" sign-in UI with usage card (tokens + R$/US$ + cap), en + pt-BR.
+- Channels: WhatsApp + Telegram business replies routed through the gateway via `GatewayDirectAgent` (OpenAI-compatible, fresh token), gateway-only model selection with a low-cost default and always-current per-message resolution. Verified end-to-end including Google Calendar tool-calls.
 - **Deployed to Cloud Run** (`southamerica-east1`, project `thaira`) on Cloud SQL `neo-thairahub` / DB `thaira_gateway`. **Full e2e verified live:** Firebase sign-in → tenant provisioned in Postgres → `/v1/chat/completions` to OpenRouter (real cost recorded) → `/v1/usage` with live R$. Desktop wired (`THAIRA_GATEWAY_URL` + a dedicated API-restricted `FIREBASE_WEB_API_KEY`).
 - **Stripe billing (flat tiers)**: `/v1/billing/checkout` + `/v1/billing/portal` (hosted Checkout / Customer Portal) and the `/webhooks/stripe` reconciler are deployed and **verified in sandbox** (checkout URL → subscription → webhook set `plan=starter, status=active`; portal URL returned). Desktop "Thaira Account" tab has Upgrade (Starter/Pro) + Manage-billing buttons.
 
