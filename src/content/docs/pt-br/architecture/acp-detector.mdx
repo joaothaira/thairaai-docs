@@ -1,0 +1,735 @@
+---
+title: Detecção e Conexão de Agentes ACP
+description: Como o ThairaAI descobre agentes de CLI ACP no sistema, por que conversa com eles através de adaptadores e como uma conexão Claude Code é estabelecida de ponta a ponta — incluindo o que acontece dentro do bridge claude-agent-acp.
+---
+
+O ThairaAI pode controlar muitos agentes de código diferentes (Claude Code, Qwen, Codex, Goose, …) que todos falam o **Agent Communication Protocol (ACP)** via CLI. Disso decorrem duas perguntas: como o app *encontra* quais agentes estão instalados e como ele *conversa* com um, uma vez selecionado? Esta página responde ambas — primeiro o motor de detecção, depois um trace completo de conexão para o Claude Code, e então um mergulho no pacote bridge que de fato roda o Claude.
+
+## Detecção de agentes (AcpDetector)
+
+O `AcpDetector` (`src/process/agent/acp/AcpDetector.ts`) é o **motor singleton de descoberta de agentes** no processo principal. Ele detecta todos os agentes de CLI ACP disponíveis no sistema a partir de três fontes em paralelo, mescla e deduplica os resultados, e produz uma lista unificada de agentes para a UI e o IPC bridge.
+
+```
+acpDetector = new AcpDetector()   // singleton de nível de módulo, exportado para uso global
+```
+
+Suas dependências-chave são `src/process/utils/shellEnv.ts` (resolução de ambiente) e `src/common/types/acpTypes.ts` (tipos).
+
+### Fluxo de detecção
+
+```
+initialize()
+│
+├── Promise.all([
+│   ├── detectBuiltinAgents()     ← Fonte 1: lista conhecida de CLIs embutidas
+│   ├── detectExtensionAgents()   ← Fonte 2: registro de extensões
+│   └── detectCustomAgents()      ← Fonte 3: configuração definida pelo usuário
+│])
+│
+├── sintetiza o agente Gemini (sempre presente, sem detecção de CLI)
+│
+├── mescla: [Aionrs, Gemini, ...Builtin, ...Other, ...Remote, ...Extension]
+│
+└── this.isInitialized = true
+```
+
+### Fontes de detecção
+
+**Fonte 1 — `detectBuiltinAgents()`**
+
+Itera sobre todas as ferramentas de CLI conhecidas em `POTENTIAL_ACP_CLIS`, chamando `isCliAvailable(cli.cmd)` para cada uma para verificar se existe no PATH do sistema.
+
+`POTENTIAL_ACP_CLIS` é gerado dinamicamente a partir de `ACP_BACKENDS_ALL` (um Proxy com inicialização lazy), com estas regras de filtro:
+
+- Precisa ter um `cliCommand`.
+- Precisa estar `enabled: true`.
+- Exclui `gemini` (embutido, sem detecção), `custom` (configurado pelo usuário) e `aionrs` (protocolo não-ACP).
+
+Retorna um `DetectedAgent[]` contendo `backend`, `name`, `cliPath` e `acpArgs`.
+
+**Fonte 2 — `detectExtensionAgents()`**
+
+Recupera os adaptadores ACP contribuídos por extensões via `ExtensionRegistry.getInstance().getAcpAdapters()`. Condições de filtro:
+
+- `connectionType` precisa ser `'cli'` ou `'stdio'`.
+- Precisa ter um `cliCommand` não vazio.
+- Chama `isCliAvailable(cliCommand)` para cada adaptador para verificar.
+
+Os agentes retornados têm um `backend: 'custom'` fixo e carregam os marcadores `isExtension: true` e `extensionName`. O método inteiro é envolvido em try/catch; se o `ExtensionRegistry` falhar ao carregar, ele retorna silenciosamente um array vazio.
+
+**Fonte 3 — `detectCustomAgents()`**
+
+Lê a configuração de assistentes de `ProcessConfig.get('assistants')`. Condições de filtro:
+
+- `enabled === true`.
+- `defaultCliPath` não vazio **ou** `isPreset === true`.
+
+**Nenhuma verificação de disponibilidade de CLI é feita** — o usuário é responsável por garantir que a CLI existe. Erros `ENOENT`/`not found` são silenciosamente ignorados (o arquivo de config pode ainda não existir); outros erros são logados como warnings.
+
+### Detecção de disponibilidade de CLI
+
+O método central `isCliAvailable` difere por plataforma.
+
+**macOS / Linux**
+
+```bash
+which <command>
+```
+
+- Timeout: 1 segundo.
+- Usa `enhancedEnv` como ambiente (PATH do shell + caminhos de ferramentas adicionais).
+- Sucesso: `execSync` não lança exceção → `true`. Falha → `false`.
+
+**Windows** — fallback de dois níveis:
+
+1. Primário: `where <command>` (timeout de 1 segundo).
+2. Fallback: PowerShell `Get-Command -All <command> | Select-Object -First 1 | Out-Null` (timeout de 1 segundo).
+
+### Variáveis de ambiente aprimoradas
+
+`getEnhancedEnv()` (de `shellEnv.ts`) é uma dependência crítica para a detecção de CLI. Ela garante que as ferramentas de CLI possam ser descobertas, seja o app iniciado por um terminal, seja pelo Finder/launchd.
+
+**Ordem de mesclagem do PATH (da maior para a menor prioridade):**
+
+```
+1. bundledBunDir              ← maior prioridade, runtime bun empacotado
+2. process.env.PATH           ← ambiente do processo atual
+3. shellEnv.PATH              ← ambiente do shell de login do usuário
+4. caminhos extras por plataforma ← escaneados por plataforma de dirs de instalação conhecidos
+5. customEnv.PATH             ← custom definido pelo chamador (se houver)
+```
+
+**Carregamento do ambiente de shell do usuário:**
+
+| Plataforma | Método de resolução do shell               | Shell padrão  | Comando de load     |
+| ---------- | ------------------------------------------ | ------------- | ------------------- |
+| macOS      | `dscl . -read /Users/<username> UserShell` | `/bin/zsh`    | `<shell> -l -c env` |
+| Linux      | `getent passwd <username>`                 | `/bin/bash`   | `<shell> -l -c env` |
+| Windows    | Pula o carregamento do ambiente de shell   | N/A           | N/A                 |
+
+Allowlist de variáveis de ambiente herdadas: `PATH`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_TLS_REJECT_UNAUTHORIZED`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`.
+
+**Caminhos extras de ferramentas — macOS / Linux:**
+
+| Caminho        | Propósito           |
+| -------------- | ------------------- |
+| `~/.bun/bin`   | pacotes globais bun |
+| `~/.cargo/bin` | Rust / cargo        |
+| `~/go/bin`     | Go                  |
+| `~/.deno/bin`  | Deno                |
+| `~/.local/bin` | pip, pipx, etc.     |
+
+**Caminhos extras de ferramentas — Windows:**
+
+| Caminho                                     | Propósito                          |
+| ------------------------------------------- | ---------------------------------- |
+| `%APPDATA%\npm`                             | pacotes globais npm                |
+| `%ProgramFiles%\nodejs`                     | instalação oficial do Node.js      |
+| `%APPDATA%\nvm` / `%NVM_HOME%`              | nvm-windows                        |
+| `%ProgramFiles%\nodejs` / `%NVM_SYMLINK%`   | symlink da versão ativa do nvm     |
+| `%LOCALAPPDATA%\fnm_multishells`            | fnm-windows                        |
+| `~\.volta\bin`                              | Volta                              |
+| `~\scoop\shims` / `%SCOOP%\shims`           | Scoop                              |
+| `%LOCALAPPDATA%\pnpm`                       | pnpm global                        |
+| `%ChocolateyInstall%\bin`                   | Chocolatey                         |
+| `%ProgramFiles%\Git\{cmd,bin,usr\bin}`      | Git for Windows (inclui cygpath)   |
+| `%ProgramFiles(x86)%\Git\{cmd,bin,usr\bin}` | Git for Windows (x86)              |
+| `C:\cygwin64\bin`, `C:\cygwin\bin`          | Cygwin                             |
+| `~\.bun\bin`                                | pacotes globais bun                |
+
+Todos os caminhos só são anexados se **existirem e ainda não estiverem no PATH atual**.
+
+### Lista completa de detecção de CLI
+
+| Backend ID         | Comando CLI | Args de lançamento ACP               | Nome           |
+| ------------------ | ----------- | ------------------------------------ | -------------- |
+| `claude`           | `claude`    | `['--experimental-acp']`             | Claude Code    |
+| `qwen`             | `qwen`      | `['--acp']`                          | Qwen Code      |
+| `codex`            | `codex`     | `[]`                                 | Codex          |
+| `codebuddy`        | `codebuddy` | `['--acp']`                          | CodeBuddy      |
+| `goose`            | `goose`     | `['acp']`                            | Goose          |
+| `auggie`           | `auggie`    | `['--acp']`                          | Augment Code   |
+| `kimi`             | `kimi`      | `['acp']`                            | Kimi CLI       |
+| `opencode`         | `opencode`  | `['acp']`                            | OpenCode       |
+| `droid`            | `droid`     | `['exec', '--output-format', 'acp']` | Factory Droid  |
+| `copilot`          | `copilot`   | `['--acp', '--stdio']`               | GitHub Copilot |
+| `qoder`            | `qodercli`  | `['--acp']`                          | Qoder CLI      |
+| `vibe`             | `vibe-acp`  | `[]`                                 | Mistral Vibe   |
+| `openclaw-gateway` | `openclaw`  | `['gateway']`                        | OpenClaw       |
+| `nanobot`          | `nanobot`   | `['--experimental-acp']`             | Nano Bot       |
+| `cursor`           | `agent`     | `['acp']`                            | Cursor Agent   |
+| `kiro`             | `kiro-cli`  | `['acp']`                            | Kiro           |
+
+**Backends excluídos da detecção de CLI:**
+
+| Backend ID | Motivo                                                    |
+| ---------- | --------------------------------------------------------- |
+| `gemini`   | Agente embutido, sempre disponível, sem detecção de CLI   |
+| `custom`   | Definido pelo usuário, sem `cliCommand`                   |
+| `aionrs`   | Protocolo não-ACP (JSON Lines), explicitamente excluído   |
+| `remote`   | Sem CLI local, conecta via URL WebSocket                  |
+
+### Mesclagem, deduplicação e refresh
+
+Ordem de mesclagem: **Aionrs > Gemini > Builtin > Other > Remote > Extension**. Nenhuma deduplicação é feita — a mesma CLI pode existir simultaneamente como builtin e como extensão; a diferenciação é tratada na camada de UI.
+
+| Método                     | Escopo do refresh             | Limpa cache de env |
+| -------------------------- | ----------------------------- | ------------------ |
+| `refreshBuiltinAgents()`   | Apenas agentes de CLI embutidos | Sim              |
+| `refreshExtensionAgents()` | Apenas agentes de extensão    | Sim                |
+| `refreshRemoteAgents()`    | Apenas agentes remotos        | Não                |
+| `refreshAll()`             | Todas as fontes redetectadas  | Sim                |
+
+Todos os métodos de refresh primeiro removem os agentes do tipo correspondente, depois redetectam e anexam.
+
+### Inicialização e consumidores
+
+| Modo de lançamento | Arquivo de entrada                          | Invocação                                  |
+| ------------------ | ------------------------------------------- | ------------------------------------------ |
+| Electron           | `src/index.ts`                              | `initializeAcpDetector()` (async paralelo) |
+| Standalone         | `src/process/utils/initBridgeStandalone.ts` | `acpDetector.initialize()` (chamada direta) |
+
+| Consumidor                                      | Propósito                                                     |
+| ----------------------------------------------- | ------------------------------------------------------------- |
+| `src/process/bridge/acpConversationBridge.ts`   | IPC bridge: obtém lista de agentes, health check, sondagem de model |
+| `src/process/extensions/hub/HubInstaller.ts`    | refreshAll + verifica resultados de detecção após instalar extensão |
+| `src/process/extensions/hub/HubStateManager.ts` | Faz refresh de agentes embutidos para determinar status de instalação de extensão |
+| `src/process/team/TeammateManager.ts`           | Filtra tipos de agente disponíveis para a feature de Team     |
+| `src/process/channels/actions/SystemActions.ts` | Monta a lista de agentes selecionáveis para os canais         |
+
+### Tolerância a falhas
+
+1. **Cada fonte de detecção tem seu próprio try/catch** — uma fonte falhar não afeta as outras.
+2. **Gemini é sempre injetado** — garante ao menos um agente disponível.
+3. **Timeout de detecção de CLI de 1 segundo** — impede `which`/`where` de travar.
+4. **Timeout de carregamento do ambiente de shell de 5 segundos** — impede configs de shell anômalas de travar a inicialização.
+5. **Fallback duplo no Windows** — se `where` falhar, tenta automaticamente o PowerShell `Get-Command`.
+6. **A inicialização é idempotente** — `initialize()` usa o flag `isDetected` para evitar execução duplicada.
+7. **Agentes custom pulam a validação de CLI** — a verificação de disponibilidade é pulada; os usuários são responsáveis.
+8. **cache de env limpo sob demanda** — cada refresh limpa o `enhancedEnv` para capturar mudanças no PATH.
+
+## Conectando a um backend: um trace do Claude Code
+
+Uma vez selecionado um agente, a conexão percorre esta cadeia de arquivos:
+
+`AcpDetector.ts` → `acpConversationBridge.ts` → `AcpAgentManager.ts` → `AcpAgent (index.ts)` → `AcpConnection.ts` → `acpConnectors.ts`.
+
+```
+Usuário seleciona Claude Code → envia mensagem
+│
+├── [IPC Bridge] acpConversationBridge
+│   └── workerTaskManager.getOrBuildTask(conversationId)
+│
+├── [Task Manager] AcpAgentManager
+│   ├── resolveCliPath('claude') → 'claude' ou caminho configurado pelo usuário
+│   ├── new AcpAgent({ backend: 'claude', cliPath, ... })
+│   └── agent.start()
+│
+├── [Agent] AcpAgent.start()
+│   ├── connection.connect('claude', cliPath, workingDir)
+│   ├── performAuthentication()
+│   ├── createOrResumeSession()
+│   ├── applyYoloMode() (se habilitado)
+│   └── applyModelFromSettings()
+│
+├── [Connection] AcpConnection.connect('claude')
+│   └── doConnect() → switch('claude') → connectClaude()
+│
+├── [Connector] connectClaude()
+│   └── connectNpxBackend({
+│       npxPackage: '@zed-industries/claude-agent-acp@0.21.0',
+│       prepareFn: prepareClaude,
+│   })
+│
+├── [Spawn] spawnNpxBackend()
+│   └── spawn(npxCommand, ['--yes', '--prefer-offline',
+│       '@zed-industries/claude-agent-acp@0.21.0'], { stdio: 'pipe', detached: true })
+│
+├── [Protocol] setupChildProcessHandlers()
+│   ├── stdout → parsing NDJSON → handleMessage()
+│   ├── stderr → buffer de diagnóstico
+│   └── initialize() → handshake JSON-RPC
+│
+└── [Session] newSession() / sendPrompt()
+    └── JSON-RPC via stdin/stdout
+```
+
+### Descoberta-chave: o Claude não é iniciado diretamente
+
+**O Claude Code não é** lançado diretamente via `claude --experimental-acp`. O que de fato é lançado é um **pacote bridge npx**:
+
+```bash
+# Comando realmente executado (macOS)
+/usr/local/bin/npx --yes --prefer-offline @zed-industries/claude-agent-acp@0.21.0
+```
+
+`@zed-industries/claude-agent-acp` é um bridge ACP mantido pela Zed que internamente trata de lançar e gerenciar a CLI do Claude Code. O ThairaAI se comunica com esse bridge via JSON-RPC (NDJSON) por stdin/stdout. (Veja [Dentro do bridge claude-agent-acp](#dentro-do-bridge-claude-agent-acp) para o que acontece dentro dele.)
+
+### Resolução do caminho da CLI (`AcpAgentManager.ts`)
+
+Quando `backend === 'claude'`, a lógica de resolução de caminho é:
+
+1. Lê `ProcessConfig.get('acp.config')` para checar se o usuário configurou um `cliPath` custom.
+2. Se não, recorre a `ACP_BACKENDS_ALL.claude.cliCommand` = `'claude'`.
+3. Para o Claude, `acpArgs` é undefined em `ACP_BACKENDS_ALL`, então o padrão `['--experimental-acp']` é usado.
+
+No entanto, esse `cliPath` e `acpArgs` **não afetam de fato a conexão** para o Claude — ele segue o caminho do bridge npx, não um spawn genérico.
+
+### Preparação do ambiente (`prepareClaude`)
+
+De `acpConnectors.ts`:
+
+```typescript
+async function prepareClaude(): Promise<NpxPrepareResult> {
+  const cleanEnv = await prepareCleanEnv();
+  ensureMinNodeVersion(cleanEnv, 20, 10, 'Claude ACP bridge');
+  return { cleanEnv, npxCommand: resolveNpxPath(cleanEnv) };
+}
+```
+
+O que `prepareCleanEnv()` faz:
+
+1. `loadFullShellEnvironment()` — carrega assincronamente o ambiente de shell completo do usuário (`<shell> -i -l -c env`, incluindo API keys exportadas no `.zshrc`, etc.).
+2. `getEnhancedEnv()` — mescla `process.env` + PATH do shell + caminhos de ferramentas por plataforma + bun empacotado.
+3. Mescla ambos: `{ ...fullShellEnv, ...enhancedEnv }`.
+4. Limpa variáveis nocivas: remove `NODE_OPTIONS`, `NODE_INSPECT`, `NODE_DEBUG`; remove `CLAUDECODE` (previne detecção aninhada); remove todas as variáveis `npm_*` (previne interferência do ciclo de vida do npm).
+
+O bridge ACP do Claude requer **Node.js ≥ 20.10**. Se uma versão mais antiga for detectada, ele escaneia os diretórios nvm/fnm/volta por uma versão adequada e corrige o PATH.
+
+### Spawn do processo (`spawnNpxBackend`)
+
+Uma estratégia de retentativa em duas fases:
+
+```
+Fase 1: npx --yes --prefer-offline @zed-industries/claude-agent-acp@0.21.0
+        ↓ falhou?
+Fase 2: npx --yes @zed-industries/claude-agent-acp@0.21.0  (sem --prefer-offline)
+```
+
+- **Fase 1**: usa `--prefer-offline` para preferir o cache local do npm (~1-2s).
+- **Fase 2**: após a Fase 1 falhar, descarta `--prefer-offline` e busca do registro npm (~3-5s).
+
+Argumentos reais do spawn:
+
+```typescript
+spawn(
+  npxCommand,
+  [
+    '--yes', // auto-confirma a instalação
+    '--prefer-offline', // só na Fase 1
+    '@zed-industries/claude-agent-acp@0.21.0',
+  ],
+  {
+    cwd: workingDir,
+    stdio: ['pipe', 'pipe', 'pipe'], // stdin/stdout/stderr todos em pipe
+    env: cleanEnv,
+    shell: false, // não usa shell no Unix
+    detached: true, // macOS/Linux: cria nova session, previne SIGTTOU
+  }
+);
+child.unref(); // permite o processo pai sair normalmente
+```
+
+Se a conexão falhar, `connect()` (em `AcpConnection.ts`) tem duas camadas adicionais de recuperação:
+
+1. **notarget / version mismatch**: executa `npm cache clean --force`, depois tenta de novo.
+2. **cache do npx corrompido** (ENOENT/ERR_MODULE_NOT_FOUND): deleta todo o diretório `~/.npm/_npx`, depois tenta de novo.
+
+### Estabelecimento do protocolo (`setupChildProcessHandlers`)
+
+**Parsing do stdout — protocolo NDJSON:**
+
+```typescript
+let buffer = '';
+child.stdout?.on('data', (data: Buffer) => {
+  buffer += data.toString();
+  const lines = buffer.split('\n');
+  buffer = lines.pop() || ''; // retém a última linha incompleta
+
+  for (const line of lines) {
+    if (line.trim()) {
+      const message = JSON.parse(line) as AcpMessage;
+      this.handleMessage(message);
+    }
+  }
+});
+```
+
+Cada linha do stdout é uma mensagem JSON-RPC completa. O protocolo é **Newline-Delimited JSON (NDJSON)**.
+
+**Handshake de inicialização:**
+
+```typescript
+await Promise.race([
+  this.initialize(), // envia a requisição initialize
+  new Promise((reject) => setTimeout(reject, 60000)), // timeout de 60 segundos
+  processExitPromise, // falha imediatamente se o processo sair cedo
+]);
+```
+
+A requisição `initialize` enviada ao stdin do filho:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 0,
+  "method": "initialize",
+  "params": { "protocolVersion": 1, "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true } } }
+}
+```
+
+A resposta contém `authMethods`, `agentCapabilities` (incluindo `mcpCapabilities`), etc.
+
+### Autenticação
+
+Fluxo de autenticação do Claude (`src/process/agent/acp/index.ts`):
+
+1. Verifica `authMethods` na resposta do `initialize`.
+2. Primeiro tenta criar uma session diretamente.
+3. Se a autenticação falhar, executa `claude /login` para renovar o token.
+4. Tenta criar a session de novo.
+
+### Criação da session
+
+```json
+// Enviado:
+{"jsonrpc":"2.0","id":2,"method":"session/new","params":{
+  "cwd": ".",
+  "mcpServers": [...],
+  "_meta": {
+    "claudeCode": {
+      "options": {
+        "resume": "<existing-session-id>"
+      }
+    }
+  }
+}}
+```
+
+Específico do Claude: a retomada de session é implementada via `_meta.claudeCode.options.resume` (outros backends usam o parâmetro `resumeSessionId`). A resposta contém `sessionId`, `configOptions` (model, mode) e `models`.
+
+### Troca de mensagens
+
+Enviando um prompt:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "session/prompt",
+  "params": {
+    "sessionId": "abc123",
+    "prompt": [{ "type": "text", "text": "Mensagem de entrada do usuário" }]
+  }
+}
+```
+
+O filho envia mensagens NDJSON via stdout, despachadas por `handleMessage()`:
+
+| Tipo de mensagem | Condição                   | Tratamento                                                     |
+| ---------------- | -------------------------- | -------------------------------------------------------------- |
+| **Response**     | Tem `id`, sem `method`     | Casa com uma Promise em pendingRequests, resolve/reject        |
+| **Notification** | Tem `method`, sem `id`     | Despachada para `handleIncomingRequest()`                      |
+| **Request**      | Tem `method` e `id`        | Despachada para `handleIncomingRequest()`, resposta escrita de volta |
+
+Tratamento de métodos de entrada:
+
+| Método                       | Propósito                                 | Tratamento                                                        |
+| ---------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
+| `session/update`             | Conteúdo em streaming, tool calls, thinking | → `AcpAgent` → `AcpAdapter` → convertido em mensagens de UI       |
+| `session/request_permission` | Requisição de permissão de ferramenta     | Pausa o timeout → mostra diálogo de UI → usuário seleciona → escreve o resultado de volta |
+| `fs/read_text_file`          | Backend lê um arquivo                     | Faz parse do caminho → `readTextFile()` → escreve o conteúdo de volta |
+| `fs/write_text_file`         | Backend escreve um arquivo                | Faz parse do caminho → `writeTextFile()` → notifica a UI         |
+
+O fluxo de dados para conteúdo em streaming:
+
+```
+AcpConnection.onSessionUpdate
+  → AcpAgent.handleSessionUpdate()
+    → AcpAdapter.convertSessionUpdate()  // converte em TMessage[]
+    → AcpAgent.emitMessage()
+      → callback AcpAgentManager.onStreamEvent
+        → transformMessage() → addOrUpdateMessage() (DB)
+        → ipcBridge.acpConversation.responseStream.emit() (para o renderer)
+```
+
+### Cancelamento e desconexão
+
+Cancelar o prompt atual (sem matar o processo):
+
+```json
+{ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": "abc123" } }
+```
+
+Desconexão completa:
+
+```
+AcpConnection.disconnect()
+  → stopPromptKeepalive()
+  → terminateChild()
+    → killChild()
+      macOS/Linux (detached): process.kill(-pid, 'SIGTERM')  // mata o grupo de processos
+      Windows: taskkill /PID <pid> /T /F
+    → espera até 3 segundos
+  → reseta todo o estado
+```
+
+### Comportamento específico do Claude vs. outros backends
+
+| Recurso                      | Claude                                                  | Outros backends                              |
+| ---------------------------- | ------------------------------------------------------- | -------------------------------------------- |
+| **Método de lançamento**     | bridge npx (`@zed-industries/claude-agent-acp`)         | Spawn direto da CLI (`goose acp`, `qwen --acp`) |
+| **Retomada de session**      | `_meta.claudeCode.options.resume`                       | parâmetro `resumeSessionId`                  |
+| **Fonte do model**           | Lê `ANTHROPIC_MODEL` de `~/.claude/settings.json`       | resposta de `session/new`                    |
+| **Modo YOLO**                | `'bypassPermissions'`                                   | `'yolo'` (Qwen, etc.)                        |
+| **Recuperação de falha de auth** | Executa `claude /login` para renovar o token        | Sem tratamento especial                      |
+| **Troca de model**           | Injeta `<system-reminder>` para notificar a IA de uma troca de model | Nenhum                          |
+| **Requisito de versão do Node** | ≥ 20.10                                              | ≥ 18.17 (genérico)                           |
+| **Recuperação de cache do npx** | Suportada (membro de NPX_BACKENDS)                   | Não aplicável                                |
+
+### Mapa de módulos ACP
+
+| Módulo                  | Arquivo                    | Responsabilidade                                                              |
+| ----------------------- | -------------------------- | ----------------------------------------------------------------------------- |
+| `AcpDetector`           | `AcpDetector.ts`           | Detectar agentes de CLI instalados no sistema                                 |
+| `acpConversationBridge` | `acpConversationBridge.ts` | IPC bridge entre o renderer e o processo principal                            |
+| `AcpAgentManager`       | `AcpAgentManager.ts`       | Gestão do ciclo de vida da task: cria Agent, persiste, eventos IPC            |
+| `AcpAgent`              | `index.ts`                 | Orquestra conexão/auth/session/mensagens; permissões, troca de model          |
+| `AcpConnection`         | `AcpConnection.ts`         | Protocolo central: gestão de processo filho, envio/recepção JSON-RPC, estado da session |
+| `acpConnectors`         | `acpConnectors.ts`         | Lógica de spawn por backend, preparação de ambiente, Fase 1/2 do npx          |
+| `AcpAdapter`            | `AcpAdapter.ts`            | Converte updates de session ACP para o formato TMessage do AionUi             |
+| `ApprovalStore`         | `ApprovalStore.ts`         | Cache de permissão "always allow" a nível de session                          |
+| `utils`                 | `utils.ts`                 | Escrita JSON-RPC no stdin, terminação de processo, I/O de arquivo             |
+| `mcpSessionConfig`      | `mcpSessionConfig.ts`      | Monta a lista de servidores MCP para session/new                              |
+| `modelInfo`             | `modelInfo.ts`             | Extrai info do model de configOptions/models                                  |
+| `constants`             | `constants.ts`             | Strings de modo YOLO por backend                                              |
+
+## Dentro do bridge claude-agent-acp
+
+As seções acima mostraram como o ThairaAI lança `@zed-industries/claude-agent-acp` via npx. Esta seção mergulha no próprio pacote bridge, traçando como ele descobre e controla o runtime local do Claude via `claude-code-sdk`.
+
+Referências de código-fonte:
+
+- Adaptador: [github.com/agentclientprotocol/claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp) (Apache-2.0)
+- Claude Agent SDK: [github.com/anthropics/claude-agent-sdk-typescript](https://github.com/anthropics/claude-agent-sdk-typescript)
+- ACP SDK: [github.com/agentclientprotocol/typescript-sdk](https://github.com/agentclientprotocol/typescript-sdk)
+
+O pacote foi migrado de `@zed-industries/claude-agent-acp` (v0.23.1) para `@agentclientprotocol/claude-agent-acp` (v0.25.3), compartilhando a mesma base de código.
+
+### Cadeia de dependências interna
+
+```
+@agentclientprotocol/claude-agent-acp
+  ├── @agentclientprotocol/sdk (0.17.0)         -- implementação do protocolo ACP
+  ├── @anthropic-ai/claude-agent-sdk (0.2.83+)   -- Claude Code SDK
+  │     ├── @anthropic-ai/sdk (^0.80.0)          -- cliente da API Anthropic
+  │     ├── @modelcontextprotocol/sdk (^1.27.1)  -- protocolo MCP
+  │     └── cli.js                               -- CLI Claude Code embutida (~13MB)
+  └── zod (^3.25.0 || ^4.0.0)
+```
+
+### Descoberta central: usa uma CLI embutida, não o seu PATH
+
+**O `claude-agent-acp` não busca no PATH do sistema por uma CLI `claude` instalada localmente.** Ele sempre usa o `cli.js` embutido dentro do pacote npm `@anthropic-ai/claude-agent-sdk` (versão travada, ex.: Claude Code v2.1.92). Esse `cli.js` é um runtime Claude Code completo, autocontido, minificado, de ~13MB.
+
+### Trace da cadeia completa
+
+**Passo 1 — ponto de entrada (`dist/index.js`)**
+
+```js
+// modo --cli: roda diretamente a CLI Claude embutida do SDK
+if (process.argv.includes('--cli')) {
+  await import(await claudeCliPath());
+}
+
+// modo padrão: roda como agente ACP
+runAcp();
+```
+
+**Passo 2 — estabelecimento do transporte ACP (`runAcp()`)**
+
+```js
+export function runAcp() {
+  const input = nodeToWebWritable(process.stdout);
+  const output = nodeToWebReadable(process.stdin);
+  const stream = ndJsonStream(input, output);
+  new AgentSideConnection((client) => new ClaudeAcpAgent(client), stream);
+}
+```
+
+O adaptador se comunica com o cliente ACP upstream (ThairaAI / editor Zed, etc.) via **NDJSON por stdin/stdout**. `AgentSideConnection` trata o dispatch JSON-RPC.
+
+**Passo 3 — como o adaptador chama o claude-code-sdk**
+
+Três funções-chave são importadas do SDK:
+
+```js
+import { getSessionMessages, listSessions, query } from '@anthropic-ai/claude-agent-sdk';
+```
+
+| Função                 | Propósito                                                   |
+| ---------------------- | ----------------------------------------------------------- |
+| `query()`              | Função central: cria o subprocesso da CLI para uma session  |
+| `listSessions()`       | Lista sessions existentes do disco                          |
+| `getSessionMessages()` | Recupera mensagens de uma session anterior para replay      |
+
+Ao criar uma nova session ACP:
+
+```js
+const q = query({
+  prompt: input, // AsyncIterable<SDKUserMessage> (Pushable)
+  options, // configuração da session
+});
+```
+
+**Passo 4 — como o SDK localiza o binário da CLI (caminho crítico)**
+
+Dentro de `sdk.mjs`, a função de inicialização resolve o caminho do executável:
+
+```js
+// pseudocódigo desofuscado de sdk.mjs
+let pathToClaudeCodeExecutable = options.pathToClaudeCodeExecutable;
+if (!pathToClaudeCodeExecutable) {
+  const currentDir = fileURLToPath(import.meta.url);
+  const parentDir = path.join(currentDir, '..');
+  pathToClaudeCodeExecutable = path.join(parentDir, 'cli.js');
+}
+```
+
+**Comportamento padrão: usa o `cli.js` no mesmo diretório do pacote SDK, sem busca no PATH.** O helper de resolução de caminho no lado do adaptador:
+
+```js
+export async function claudeCliPath() {
+  return isStaticBinary()
+    ? (await import('@anthropic-ai/claude-agent-sdk/embed')).default
+    : import.meta.resolve('@anthropic-ai/claude-agent-sdk').replace('sdk.mjs', 'cli.js');
+}
+```
+
+**Passo 5 — formas de sobrescrever o caminho da CLI**
+
+| Mecanismo                                                  | Prioridade | Descrição                                                |
+| ---------------------------------------------------------- | ---------- | -------------------------------------------------------- |
+| Variável de ambiente `CLAUDE_CODE_EXECUTABLE`              | Máxima     | Sobrescreve diretamente o caminho do executável          |
+| Modo binário estático (`CLAUDE_AGENT_ACP_IS_SINGLE_FILE_BUN`) | Alta    | Build Bun `--compile`: extrai de `$bunfs` para dir temp  |
+| `options.pathToClaudeCodeExecutable`                       | Média      | Opção de API a nível de SDK                              |
+| Fallback padrão                                            | Mínima     | `path.join(dirname(import.meta.url), "cli.js")`          |
+
+No modo binário estático (`bun build --compile`), o `cli.js` é embutido no sistema de arquivos virtual do Bun. Em tempo de execução, `extractFromBunfs()` o copia para `/tmp/claude-agent-sdk-<sha256hash>/cli.js`, porque os subprocessos não conseguem acessar o `$bunfs`.
+
+**Passo 6 — spawn do subprocesso (ProcessTransport)**
+
+A classe `ProcessTransport` dentro do SDK lança a CLI:
+
+```js
+// sdk.mjs desofuscado
+const isNativeBinary =
+  !pathToClaudeCodeExecutable.endsWith('.js') &&
+  !pathToClaudeCodeExecutable.endsWith('.mjs') &&
+  !pathToClaudeCodeExecutable.endsWith('.tsx') &&
+  !pathToClaudeCodeExecutable.endsWith('.ts') &&
+  !pathToClaudeCodeExecutable.endsWith('.jsx');
+
+const command = isNativeBinary ? pathToClaudeCodeExecutable : executable;
+// executable padrão: isBun ? "bun" : "node"
+
+this.process = spawn(command, args, {
+  cwd: cwd,
+  stdio: ['pipe', 'pipe', stderrMode],
+  signal: abortSignal,
+  env: env,
+  windowsHide: true,
+});
+```
+
+Argumentos-chave de CLI passados:
+
+| Argumento                                       | Propósito                                     |
+| ----------------------------------------------- | --------------------------------------------- |
+| `--output-format stream-json`                   | A CLI emite JSON em streaming                 |
+| `--input-format stream-json`                    | A CLI aceita entrada JSON em streaming        |
+| `--verbose`                                     | Habilita saída verbosa                        |
+| `--permission-prompt-tool stdio`                | Requisições de permissão retornadas via stdin/stdout |
+| `--model`, `--max-turns`, `--thinking`, `--cwd` | Várias opções de configuração da session      |
+
+O SDK também herda o runtime que lançou o adaptador (`executable: isStaticBinary() ? undefined : process.execPath`), garantindo que o mesmo Node.js rode o subprocesso da CLI.
+
+**Passo 7 — protocolo de comunicação entre SDK e CLI**
+
+A comunicação é baseada no **NDJSON em streaming via stdin/stdout** do subprocesso:
+
+- **Entrada (SDK → CLI)**: as mensagens do usuário são escritas no stdin como linhas JSON via `ProcessTransport.write()`.
+- **Saída (CLI → SDK)**: a CLI escreve mensagens JSON no stdout, uma por linha; o SDK as parseia linha a linha usando `readline.createInterface()`.
+
+Tipos de mensagem emitidos pela CLI:
+
+| Tipo                 | Descrição                                                        |
+| -------------------- | ---------------------------------------------------------------- |
+| `system`             | init, status, compact_boundary, session_state_changed            |
+| `result`             | success, error_during_execution, error_max_turns                 |
+| `stream_event`       | content_block_start, content_block_delta, message_start          |
+| `user` / `assistant` | Mensagens de conversa contendo blocos tool_use, text, thinking   |
+| `tool_progress`      | Progresso de execução de ferramenta                              |
+| `auth_status`        | Status de autenticação                                           |
+| `rate_limit_event`   | Evento de rate limit                                             |
+
+### Visão geral da arquitetura
+
+```
+┌─────────────────────────────────────────────────────┐
+│          ThairaAI                                   │
+│                                                     │
+│  cria o adaptador como subprocesso via npx          │
+│  comunica via NDJSON stdin/stdout (JSON-RPC)        │
+└────────────────────┬────────────────────────────────┘
+                     │ stdin/stdout (NDJSON, JSON-RPC)
+                     ▼
+┌─────────────────────────────────────────────────────┐
+│      claude-agent-acp (ACP Agent Adapter)           │
+│                                                     │
+│  ClaudeAcpAgent: traduz mensagens ACP ↔ SDK         │
+│  AgentSideConnection: dispatch JSON-RPC do ACP      │
+│  SettingsManager: lê .claude/settings.json          │
+│  Proxy de permissão: canUseTool → requestPermission │
+└────────────────────┬────────────────────────────────┘
+                     │ API query() do SDK
+                     ▼
+┌─────────────────────────────────────────────────────┐
+│       @anthropic-ai/claude-agent-sdk                │
+│                                                     │
+│  query(): cria o ProcessTransport                   │
+│  ProcessTransport: cria cli.js como subprocesso     │
+│  Caminho padrão:                                    │
+│    path.join(dirname(import.meta.url), "cli.js")    │
+└────────────────────┬────────────────────────────────┘
+                     │ child_process.spawn()
+                     │ stdin/stdout (NDJSON em streaming)
+                     ▼
+┌─────────────────────────────────────────────────────┐
+│    cli.js (Claude Code embutido ~13MB)              │
+│                                                     │
+│  Runtime Claude Code completo                       │
+│  --output-format stream-json                        │
+│  --input-format stream-json                         │
+│  --permission-prompt-tool stdio                     │
+│  comunica com a API Anthropic via HTTPS             │
+└─────────────────────────────────────────────────────┘
+```
+
+### Juntando tudo
+
+O ThairaAI lança `claude-agent-acp` via npx; uma vez que o processo bridge está rodando:
+
+1. Entre o ThairaAI e o bridge = **protocolo ACP** (NDJSON via stdin/stdout).
+2. O bridge internamente chama o `query()` do SDK = **API do SDK**.
+3. O SDK cria o subprocesso `cli.js` = **NDJSON em streaming**.
+4. `cli.js` conversa com a API Anthropic = **HTTPS**.
+
+A cadeia inteira tem **três níveis de subprocessos aninhados**:
+
+```
+ThairaAI (Electron main)
+  → npx claude-agent-acp (Node.js)
+    → node cli.js (runtime Claude Code)
+      → HTTPS → api.anthropic.com
+```

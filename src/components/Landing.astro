@@ -1,0 +1,326 @@
+---
+type ChatMessage = { from: 'them' | 'me'; text: string };
+type Card = { channel: string; messages: ChatMessage[] };
+type Content = {
+  lang: string;
+  brand: string;
+  docsHref: string;
+  homeHref: string;
+  altLabel: string;
+  altHref: string;
+  download: string;
+  wordmark: string;
+  tagline1: string;
+  tagline2: string;
+  cards: Card[];
+  featureTitles: string[];
+  description: string;
+  cta: string;
+  copyright: string;
+  terms: string;
+  termsHref: string;
+  privacy: string;
+  privacyHref: string;
+};
+
+const DOWNLOAD_URL = 'https://thaira.ai/download';
+const GITHUB_URL = 'https://github.com/joaothaira/ThairaAI';
+const year = new Date().getFullYear();
+
+const CONTENT: Record<'en' | 'pt', Content> = {
+  en: {
+    lang: 'en',
+    brand: 'Thaira',
+    docsHref: '/en/',
+    homeHref: '/',
+    altLabel: 'PT',
+    altHref: '/pt',
+    download: 'Download',
+    wordmark: 'THAIRA',
+    tagline1: 'Your AI assistant for WhatsApp, email, and calendar.',
+    tagline2: "It reads, replies, and schedules — so you don't have to.",
+    cards: [
+      {
+        channel: 'WhatsApp',
+        messages: [
+          { from: 'them', text: 'Hi! Do you have any openings this week?' },
+          { from: 'me', text: 'Hi! I have Thursday 2pm or Friday 10am open. Want me to book one?' },
+          { from: 'them', text: 'Friday 10am, please.' },
+          { from: 'me', text: "Done ✅ You're booked for Friday at 10am." },
+        ],
+      },
+      {
+        channel: 'WhatsApp',
+        messages: [
+          { from: 'them', text: 'How much is the monthly plan?' },
+          { from: 'me', text: 'The Starter plan is R$497/mo and includes everything you need to get going.' },
+          { from: 'them', text: 'Perfect, can I pay by Pix?' },
+          { from: 'me', text: 'Of course — sending you the link now.' },
+        ],
+      },
+      {
+        channel: 'Email',
+        messages: [
+          { from: 'them', text: 'Can we move our call to next week?' },
+          { from: 'me', text: 'Sure — I see Tuesday and Wednesday afternoon free on your calendar. Which works?' },
+          { from: 'them', text: 'Tuesday works.' },
+          { from: 'me', text: 'Invite sent for Tuesday 3pm. 👍' },
+        ],
+      },
+    ],
+    featureTitles: ['Answers your WhatsApp', 'Reads your inbox', 'Books your calendar', 'Works around the clock'],
+    description:
+      'Thaira connects to your WhatsApp, email, and calendar to handle the busywork — drafting replies, scheduling meetings, and keeping your clients answered, day and night.',
+    cta: 'Download Thaira',
+    copyright: `© ${year} THAIRAHUB TECNOLOGIA DA INFORMAÇÃO LTDA`,
+    terms: 'Terms',
+    termsHref: '/terms',
+    privacy: 'Privacy',
+    privacyHref: '/privacy',
+  },
+  pt: {
+    lang: 'pt-BR',
+    brand: 'Thaira',
+    docsHref: '/pt-br/',
+    homeHref: '/pt',
+    altLabel: 'EN',
+    altHref: '/',
+    download: 'Baixar',
+    wordmark: 'THAIRA',
+    tagline1: 'Seu assistente de IA para WhatsApp, e-mail e agenda.',
+    tagline2: 'Ele lê, responde e agenda — para você não precisar.',
+    cards: [
+      {
+        channel: 'WhatsApp',
+        messages: [
+          { from: 'them', text: 'Oi! Vocês têm horário essa semana?' },
+          { from: 'me', text: 'Oi! Tenho quinta às 14h ou sexta às 10h. Quer que eu agende?' },
+          { from: 'them', text: 'Sexta às 10h, por favor.' },
+          { from: 'me', text: 'Pronto ✅ Agendei para sexta às 10h.' },
+        ],
+      },
+      {
+        channel: 'WhatsApp',
+        messages: [
+          { from: 'them', text: 'Quanto custa o plano mensal?' },
+          { from: 'me', text: 'O plano Starter é R$497/mês e já inclui tudo o que você precisa para começar.' },
+          { from: 'them', text: 'Perfeito, posso pagar no Pix?' },
+          { from: 'me', text: 'Claro — já te envio o link.' },
+        ],
+      },
+      {
+        channel: 'E-mail',
+        messages: [
+          { from: 'them', text: 'Podemos remarcar nossa call para a semana que vem?' },
+          { from: 'me', text: 'Claro — vejo terça e quarta à tarde livres na sua agenda. Qual prefere?' },
+          { from: 'them', text: 'Terça funciona.' },
+          { from: 'me', text: 'Convite enviado para terça às 15h. 👍' },
+        ],
+      },
+    ],
+    featureTitles: ['Responde seu WhatsApp', 'Lê seus e-mails', 'Organiza sua agenda', 'Trabalha sem parar'],
+    description:
+      'A Thaira se conecta ao seu WhatsApp, e-mail e agenda para cuidar do operacional — escrevendo respostas, marcando reuniões e mantendo seus clientes atendidos, dia e noite.',
+    cta: 'Baixar a Thaira',
+    copyright: `© ${year} THAIRAHUB TECNOLOGIA DA INFORMAÇÃO LTDA`,
+    terms: 'Termos',
+    termsHref: '/pt/terms',
+    privacy: 'Privacidade',
+    privacyHref: '/pt/privacy',
+  },
+};
+
+const { locale = 'en' } = Astro.props as { locale: 'en' | 'pt' };
+const c = CONTENT[locale];
+const cardClasses = ['side', 'center', 'side'];
+---
+
+<!doctype html>
+<html lang={c.lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Thaira — {c.tagline1}</title>
+    <meta name="description" content={c.description} />
+    <link rel="icon" href="/favicon.svg" />
+  </head>
+  <body>
+    <header class="nav">
+      <div class="nav-inner">
+        <a class="brand" href={c.homeHref}>{c.brand}</a>
+        <div class="nav-right">
+          <span class="lang">
+            <span class="lang-active">{locale === 'en' ? 'EN' : 'PT'}</span>
+            <span class="lang-sep">|</span>
+            <a href={c.altHref}>{c.altLabel}</a>
+          </span>
+          <a class="docs" href={c.docsHref}>Docs</a>
+          <a class="download" href={DOWNLOAD_URL}>{c.download}</a>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <h1 class="wordmark" aria-hidden="true">{c.wordmark}</h1>
+        <div class="cards">
+          {
+            c.cards.map((card, i) => (
+              <div class={`mockup ${cardClasses[i]}`} style={`--d:${i * 0.12}s`}>
+                <div class="mockup-inner">
+                  <div class="chat-head">
+                    <div class="avatar">T</div>
+                    <div class="chat-meta">
+                      <p class="chat-name">Thaira</p>
+                      <p class="chat-status">{card.channel} · online</p>
+                    </div>
+                  </div>
+                  <div class="chat-body">
+                    {card.messages.map((m) => (
+                      <div class={`row ${m.from === 'me' ? 'mine' : 'theirs'}`}>
+                        <div class="bubble">
+                          {m.text}
+                          {m.from === 'me' && <span class="ticks">✓✓</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))
+          }
+        </div>
+        <p class="tagline">
+          {c.tagline1}<br />{c.tagline2}
+        </p>
+      </section>
+
+      <section class="features">
+        <ul class="feature-list">
+          {c.featureTitles.map((t, i) => <li style={`--d:${i * 0.1}s`}>{t}</li>)}
+        </ul>
+        <p class="desc">{c.description}</p>
+        <a class="cta" href={DOWNLOAD_URL}>{c.cta}</a>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <p class="copy">{c.copyright}</p>
+      <div class="legal">
+        <a href={c.termsHref}>{c.terms}</a>
+        <a href={c.privacyHref}>{c.privacy}</a>
+      </div>
+      <div class="social">
+        <a href="https://www.instagram.com/joaothaira/" aria-label="Instagram" target="_blank" rel="noopener noreferrer">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none"/></svg>
+        </a>
+        <a href="https://www.tiktok.com/@joaothaira" aria-label="TikTok" target="_blank" rel="noopener noreferrer">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M16 3c.3 2.3 1.7 3.9 4 4.2v2.7c-1.5.1-2.8-.3-4-1v6.5c0 3.4-2.6 5.6-5.6 5.6A5.4 5.4 0 0 1 5 15.6c0-3.1 2.7-5.3 5.8-5v2.9c-.4-.1-.9-.2-1.3-.2-1.4 0-2.5 1.1-2.5 2.4 0 1.4 1.1 2.5 2.5 2.5 1.4 0 2.6-1.1 2.6-2.6V3H16z"/></svg>
+        </a>
+        <a href="https://www.youtube.com/@joaothaira" aria-label="YouTube" target="_blank" rel="noopener noreferrer">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M23 12s0-3.3-.4-4.9a2.5 2.5 0 0 0-1.8-1.8C19.2 5 12 5 12 5s-7.2 0-8.8.3a2.5 2.5 0 0 0-1.8 1.8C1 8.7 1 12 1 12s0 3.3.4 4.9a2.5 2.5 0 0 0 1.8 1.8C4.8 19 12 19 12 19s7.2 0 8.8-.3a2.5 2.5 0 0 0 1.8-1.8C23 15.3 23 12 23 12zM9.8 15.3V8.7l5.7 3.3-5.7 3.3z"/></svg>
+        </a>
+      </div>
+    </footer>
+
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        background: #191919;
+        color: #fff;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        overflow-x: hidden;
+      }
+      a { color: inherit; text-decoration: none; }
+
+      /* Nav */
+      .nav { position: fixed; top: 1rem; left: 50%; transform: translateX(-50%); z-index: 50; width: 92%; max-width: 42rem; }
+      .nav-inner {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 0.7rem 1.2rem; border-radius: 9999px;
+        background: rgba(25,25,25,0.85); backdrop-filter: blur(12px);
+        border: 1px solid rgba(255,255,255,0.08);
+      }
+      .brand { font-weight: 600; letter-spacing: -0.01em; }
+      .nav-right { display: flex; align-items: center; gap: 0.6rem; }
+      .lang { display: flex; align-items: center; gap: 0.35rem; font-size: 0.75rem; color: rgba(255,255,255,0.5); }
+      .lang-active { color: #fff; }
+      .lang-sep { color: rgba(255,255,255,0.2); }
+      .lang a:hover { color: rgba(255,255,255,0.8); }
+      .docs { font-size: 0.875rem; color: rgba(255,255,255,0.6); }
+      .docs:hover { color: #fff; }
+      .download { background: #fff; color: #000; font-size: 0.875rem; font-weight: 500; padding: 0.4rem 1rem; border-radius: 9999px; }
+      .download:hover { background: rgba(255,255,255,0.9); }
+
+      /* Hero */
+      .hero { position: relative; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 7rem 1.5rem 9rem; overflow: hidden; }
+      .wordmark {
+        position: absolute; top: 50%; left: 50%; transform: translate(-50%, -55%);
+        margin: 0; font-weight: 700; line-height: 0.8; letter-spacing: -0.05em;
+        font-size: 30vw; color: rgba(255,255,255,0.05); white-space: nowrap; z-index: 0; pointer-events: none;
+      }
+      .cards { position: relative; z-index: 10; display: flex; align-items: center; justify-content: center; gap: 1.5rem; flex-wrap: nowrap; }
+
+      .mockup {
+        flex-shrink: 0; width: 300px; border-radius: 2.2rem; border: 1px solid rgba(255,255,255,0.1);
+        background: #0b141a; padding: 0.5rem; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.6);
+        opacity: 0; animation: fadeUp 0.7s ease forwards; animation-delay: var(--d, 0s);
+      }
+      .mockup.center { width: 340px; z-index: 2; animation: fadeUp 0.7s ease forwards, float 6s ease-in-out infinite; animation-delay: var(--d, 0s), 0.7s; }
+      .mockup-inner { overflow: hidden; border-radius: 1.7rem; }
+      .chat-head { display: flex; align-items: center; gap: 0.6rem; background: #202c33; padding: 0.75rem 1rem; }
+      .avatar { display: flex; align-items: center; justify-content: center; height: 2rem; width: 2rem; border-radius: 9999px; background: rgba(16,185,129,0.9); font-size: 0.85rem; font-weight: 600; }
+      .chat-name { margin: 0; font-size: 0.875rem; font-weight: 500; }
+      .chat-status { margin: 0; font-size: 0.6875rem; color: rgba(110,231,183,0.8); }
+      .chat-body { display: flex; flex-direction: column; gap: 0.5rem; background: #0b141a; padding: 1rem 0.75rem; }
+      .row { display: flex; }
+      .row.mine { justify-content: flex-end; }
+      .row.theirs { justify-content: flex-start; }
+      .bubble { max-width: 80%; border-radius: 1rem; padding: 0.5rem 0.75rem; font-size: 0.8125rem; line-height: 1.35; }
+      .row.mine .bubble { background: #059669; color: #fff; border-bottom-right-radius: 0.25rem; }
+      .row.theirs .bubble { background: #202c33; color: rgba(255,255,255,0.9); border-bottom-left-radius: 0.25rem; }
+      .ticks { margin-left: 0.3rem; font-size: 0.7rem; color: rgba(167,243,208,0.85); }
+
+      .tagline {
+        position: relative; z-index: 10; margin: 3.5rem auto 0; max-width: 42rem; text-align: center;
+        font-size: clamp(1.5rem, 3.5vw, 2.25rem); line-height: 1.4; color: rgba(255,255,255,0.7);
+        opacity: 0; animation: fadeUp 0.8s ease forwards; animation-delay: 0.5s;
+      }
+
+      /* Features */
+      .features { background: #191919; padding: 8rem 1.5rem; max-width: 64rem; margin: 0 auto; text-align: center; }
+      .feature-list { list-style: none; margin: 0 0 4rem; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+      .feature-list li {
+        font-size: clamp(2rem, 7vw, 4.5rem); font-weight: 500; line-height: 1.05; letter-spacing: -0.03em; color: #fff;
+        opacity: 0; transform: translateY(20px); animation: fadeUp 0.7s ease forwards; animation-delay: var(--d, 0s);
+      }
+      .desc { margin: 0 auto; max-width: 48rem; font-size: clamp(1.25rem, 3vw, 2rem); line-height: 1.5; color: rgba(255,255,255,0.5); }
+      .cta { display: inline-block; margin-top: 3.5rem; border-radius: 9999px; background: #fff; color: #000; padding: 1rem 2rem; font-size: 1rem; font-weight: 500; transition: transform 0.15s ease, background 0.2s ease; }
+      .cta:hover { background: rgba(255,255,255,0.9); transform: scale(1.03); }
+
+      /* Footer */
+      .foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; border-top: 1px solid rgba(255,255,255,0.05); background: #191919; padding: 1.5rem; }
+      .copy { margin: 0; font-size: 0.75rem; letter-spacing: 0.02em; color: rgba(255,255,255,0.25); }
+      .legal { display: flex; align-items: center; gap: 1.25rem; }
+      .legal a { font-size: 0.75rem; color: rgba(255,255,255,0.25); }
+      .legal a:hover { color: rgba(255,255,255,0.5); }
+      .social { display: flex; align-items: center; gap: 1rem; }
+      .social a { color: rgba(255,255,255,0.25); display: inline-flex; }
+      .social a:hover { color: rgba(255,255,255,0.6); }
+
+      @keyframes fadeUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+      @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-12px); } }
+
+      @media (max-width: 1100px) {
+        .mockup.side { display: none; }
+        .wordmark { font-size: 46vw; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .mockup, .mockup.center, .tagline, .feature-list li { animation: none; opacity: 1; transform: none; }
+      }
+    </style>
+  </body>
+</html>

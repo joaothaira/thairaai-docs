@@ -1,0 +1,157 @@
+---
+import LegalPage from '../components/LegalPage.astro';
+---
+
+<LegalPage
+  title="Privacy Policy"
+  lastUpdated="May 28, 2026"
+  locale="en"
+  altHref="/pt/privacy"
+  description="How ThairaAI collects, uses, stores, and protects your personal data under the Brazilian General Data Protection Law (LGPD)."
+>
+  <h2>Who We Are — Data Controller</h2>
+  <p>
+    This Privacy Policy applies to the use of ThairaAI (thaira.ai), an AI-powered assistant that connects to your
+    WhatsApp, Telegram, email, and calendar to read incoming messages and help you reply, schedule, and manage your
+    communications. The service is operated by <strong>THAIRAHUB TECNOLOGIA DA INFORMAÇÃO LTDA</strong>, registered
+    under CNPJ 64.477.587/0001-07, headquartered at Rua Rio Grande do Norte, 1436, Sala 813, Savassi, Belo
+    Horizonte/MG, CEP 30130-138, Brasil (&quot;ThairaAI&quot;, &quot;we&quot;, &quot;Controller&quot;).
+  </p>
+  <p>
+    For purposes of Brazil&apos;s General Data Protection Law (LGPD), THAIRAHUB TECNOLOGIA DA INFORMAÇÃO LTDA acts as
+    the Controller of personal data collected and processed through the platform.
+  </p>
+
+  <h2>1. Policy Availability</h2>
+  <p>
+    This Privacy Policy is made available on a dedicated page in HTML format, is accessible from the homepage and from
+    prominent locations within the application, and will be updated whenever there are relevant changes to data
+    processing practices.
+  </p>
+
+  <h2>2. What Personal Data We Collect</h2>
+  <p>
+    <strong>2.1. Registration data</strong> — When you create an account we collect your full name, email address, and
+    profile photo, whether you sign in with Google or with an email and password (authentication is handled by Firebase
+    Authentication, a Google service).
+  </p>
+  <p>
+    <strong>2.2. Usage and metering data</strong> — We automatically collect your IP address, browser type, operating
+    system, device identifiers, date and time of access, and activity logs. To operate and bill the service we also
+    record AI usage metering: the number of requests, token counts, the model used, and the associated cost.
+  </p>
+  <p>
+    <strong>2.3. Communication content</strong> — When you connect a channel (WhatsApp or Telegram) or a Google account
+    (Gmail and Google Calendar), we process the messages, emails, and calendar events necessary to generate the replies
+    and assistance you request. Message and AI requests are routed through our managed gateway solely to produce the
+    responses you ask for. <strong>This content is not used to train AI models.</strong>
+  </p>
+  <p>
+    <strong>2.4. Connected-account credentials</strong> — To keep your connections active, we store the OAuth access and
+    refresh tokens for your Google account (Gmail and Calendar) and the session credentials for your messaging channels.
+    These credentials are stored encrypted and are used only to maintain the integration you authorized.
+  </p>
+  <p>
+    <strong>2.5. Billing data</strong> — When you subscribe to a paid plan, Stripe processes your payment. We store
+    order metadata (amount, plan, and date) but never your full card details.
+  </p>
+
+  <h2>3. Legal Bases and Purposes of Processing</h2>
+  <p>We process your data based on:</p>
+  <ul>
+    <li><strong>Contract execution (Art. 7, V, LGPD)</strong> — to create your account, connect your channels and accounts, generate replies and assistance, process payments, and provide support;</li>
+    <li><strong>Legitimate interest (Art. 7, IX, LGPD)</strong> — platform security, fraud prevention, service improvement, and metering and capping of usage;</li>
+    <li><strong>Legal obligation</strong> — tax record retention as required by Brazilian law;</li>
+    <li><strong>Consent</strong> — to connect your Google and messaging accounts, and for optional communications such as product updates and tips.</li>
+  </ul>
+
+  <h2>4. How We Store Personal Data</h2>
+  <p>
+    We use Google Cloud Platform (Cloud Run and Cloud SQL) hosted in the United States and Firebase (Google) for
+    authentication. International data transfers comply with Article 33 of the LGPD. Data is protected with TLS/SSL
+    encryption in transit and at rest.
+  </p>
+
+  <h2>5. Who We Share Data With</h2>
+  <p>We do not sell your personal data. We may share data with:</p>
+  <ul>
+    <li><strong>Google Cloud Platform</strong> — infrastructure and storage;</li>
+    <li><strong>Firebase (Google)</strong> — authentication;</li>
+    <li><strong>Stripe</strong> — payment processing;</li>
+    <li><strong>Messaging providers</strong> — Meta (WhatsApp) and Telegram, as the channels you choose to connect;</li>
+    <li><strong>AI providers</strong> — accessed through our managed gateway solely to generate the responses you request; no data is used to train AI models.</li>
+  </ul>
+  <p>All third parties act as data processors under contractual obligations compliant with the LGPD.</p>
+  <p>
+    <strong>WhatsApp connectivity.</strong> WhatsApp integration is provided through an unofficial, open-source WhatsApp
+    API (based on the <a href="https://github.com/code-chat-br/whatsapp-api" target="_blank" rel="noopener noreferrer">code-chat-br/whatsapp-api</a>
+    project and the Baileys library), not the official WhatsApp Business API. Your WhatsApp messages are therefore
+    processed through a self-hosted gateway that we operate, rather than through Meta&apos;s official Business API. This
+    software is not affiliated with or endorsed by WhatsApp LLC or Meta Platforms, Inc.
+  </p>
+
+  <h2>6. Automated Processing</h2>
+  <p>
+    We use your messages, emails, calendar events, and preferences to generate AI-powered replies and suggestions on
+    your behalf. No fully automated decisions with legal effects are made about you. You remain responsible for
+    reviewing and for any message sent through the service.
+  </p>
+
+  <h2>7. Data Retention and Deletion</h2>
+  <p>
+    Personal data is processed while your account is active. After account closure, data may be retained for up to 3
+    years per Brazilian Civil Code prescriptive periods, or longer when required by law (e.g., billing records).
+    Disconnecting a channel or Google account revokes the related stored credentials.
+  </p>
+  <p>You may request deletion of your data at any time by emailing <a href="mailto:agent@thairahub.com">agent@thairahub.com</a>.</p>
+
+  <h2>8. Security</h2>
+  <p>
+    Security measures include TLS/SSL encryption in transit, encrypted access tokens, restricted access controls, and
+    continuous security monitoring.
+  </p>
+
+  <h2>9. Your Rights (LGPD, Art. 18)</h2>
+  <p>You may request at any time via <a href="mailto:agent@thairahub.com">agent@thairahub.com</a>:</p>
+  <ul>
+    <li>Confirmation that we process your data;</li>
+    <li>Access to your personal data;</li>
+    <li>Correction of incomplete or inaccurate data;</li>
+    <li>Anonymization, blocking, or deletion of unnecessary data;</li>
+    <li>Data portability;</li>
+    <li>Information about third parties with whom we share data;</li>
+    <li>Revocation of consent;</li>
+    <li>Review of automated decisions.</li>
+  </ul>
+  <p>We will respond within 5 business days.</p>
+
+  <h2>10. Cookies and Analytics</h2>
+  <p>
+    We may use Google Analytics to collect anonymized information about usage trends. No names, emails, or phone numbers
+    are collected by Google Analytics. You can opt out via your browser settings.
+  </p>
+
+  <h2>11. Children&apos;s Privacy</h2>
+  <p>
+    ThairaAI is not directed at children under 18. We do not knowingly collect personal data from minors. If you believe
+    a minor has provided us data, contact us at <a href="mailto:agent@thairahub.com">agent@thairahub.com</a>.
+  </p>
+
+  <h2>12. Changes to This Policy</h2>
+  <p>
+    We will notify users of significant changes via the platform or email. Continued use after changes constitutes
+    acceptance of the updated Policy.
+  </p>
+
+  <h2>13. Data Protection Officer (DPO)</h2>
+  <p>To exercise your rights under the LGPD, contact our Data Protection Officer:</p>
+  <address>
+    <p>
+      <strong>Name:</strong> João Vitor de Oliveira<br />
+      <strong>Email:</strong> <a href="mailto:agent@thairahub.com">agent@thairahub.com</a><br />
+      <strong>Company:</strong> THAIRAHUB TECNOLOGIA DA INFORMAÇÃO LTDA<br />
+      <strong>CNPJ:</strong> 64.477.587/0001-07<br />
+      <strong>Address:</strong> Rua Rio Grande do Norte, 1436, Sala 813, Savassi, Belo Horizonte/MG, CEP 30130-138, Brasil
+    </p>
+  </address>
+</LegalPage>

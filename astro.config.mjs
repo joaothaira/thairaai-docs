@@ -23,6 +23,7 @@ export default defineConfig({
 						{ label: 'Introduction', translations: { 'pt-BR': 'Introdução' }, slug: 'getting-started/introduction' },
 						{ label: 'Installation', translations: { 'pt-BR': 'Instalação' }, slug: 'getting-started/installation' },
 						{ label: 'Quick Start', translations: { 'pt-BR': 'Início Rápido' }, slug: 'getting-started/quick-start' },
+						{ label: 'Onboarding', slug: 'getting-started/onboarding' },
 					],
 				},
 				{
@@ -61,9 +62,13 @@ export default defineConfig({
 					label: 'Architecture',
 					translations: { 'pt-BR': 'Arquitetura' },
 					items: [
+						{ label: 'Overview', translations: { 'pt-BR': 'Visão Geral' }, slug: 'architecture/overview' },
+						{ label: 'ACP Agent Detection', translations: { 'pt-BR': 'Detecção de Agentes ACP' }, slug: 'architecture/acp-detector' },
+						{ label: 'Command Queue & ACP State', translations: { 'pt-BR': 'Fila de Comandos e Estado ACP' }, slug: 'architecture/command-queue-and-acp-state' },
+						{ label: 'Agent → Team Flow', translations: { 'pt-BR': 'Fluxo Agent → Team' }, slug: 'architecture/team-onboarding-flow' },
 						{ label: 'Managed AI Gateway', translations: { 'pt-BR': 'Gateway de IA Gerenciado' }, slug: 'architecture/managed-gateway' },
-						{ label: 'WhatsApp Channel', translations: { 'pt-BR': 'Canal WhatsApp' }, slug: 'architecture/whatsapp' },
-						{ label: 'Gmail & Calendar Views', translations: { 'pt-BR': 'Visualizações Gmail e Agenda' }, slug: 'architecture/google-views' },
+						// { label: 'WhatsApp Channel', translations: { 'pt-BR': 'Canal WhatsApp' }, slug: 'architecture/whatsapp' }, // draft: true — re-add when whatsapp.mdx is published
+						// { label: 'Gmail & Calendar Views', translations: { 'pt-BR': 'Visualizações Gmail e Agenda' }, slug: 'architecture/google-views' }, // draft: true — re-add when google-views.mdx is published
 					],
 				},
 				{

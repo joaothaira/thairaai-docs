@@ -1,0 +1,111 @@
+---
+type Locale = 'en' | 'pt';
+
+interface Props {
+  title: string;
+  lastUpdated: string;
+  locale: Locale;
+  /** URL of the same page in the other language, for the EN | PT switch. */
+  altHref: string;
+  description?: string;
+}
+
+const { title, lastUpdated, locale, altHref, description } = Astro.props as Props;
+
+const strings = {
+  en: { lang: 'en', home: '/', lastUpdated: 'Last updated:', privacy: 'Privacy', terms: 'Terms', privacyHref: '/privacy', termsHref: '/terms' },
+  pt: { lang: 'pt-BR', home: '/pt', lastUpdated: 'Última atualização:', privacy: 'Privacidade', terms: 'Termos', privacyHref: '/pt/privacy', termsHref: '/pt/terms' },
+} as const;
+
+const s = strings[locale];
+const year = new Date().getFullYear();
+---
+
+<!doctype html>
+<html lang={s.lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title} — ThairaAI</title>
+    {description && <meta name="description" content={description} />}
+    <link rel="icon" href="/favicon.svg" />
+  </head>
+  <body>
+    <header class="bar">
+      <div class="bar-inner">
+        <a class="back" href={s.home}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+          ThairaAI
+        </a>
+        <div class="lang">
+          <span class={locale === 'en' ? 'on' : 'off'}>{locale === 'en' ? 'EN' : <a href={altHref}>EN</a>}</span>
+          <span class="sep">|</span>
+          <span class={locale === 'pt' ? 'on' : 'off'}>{locale === 'pt' ? 'PT' : <a href={altHref}>PT</a>}</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <article>
+        <h1>{title}</h1>
+        <p class="updated">{s.lastUpdated} {lastUpdated}</p>
+        <div class="legal">
+          <slot />
+        </div>
+      </article>
+    </main>
+
+    <footer class="foot">
+      <span>© {year} THAIRAHUB TECNOLOGIA DA INFORMAÇÃO LTDA</span>
+      <nav>
+        <a href={s.privacyHref}>{s.privacy}</a>
+        <a href={s.termsHref}>{s.terms}</a>
+      </nav>
+    </footer>
+
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        background: #191919; color: #e6e6e6;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        -webkit-font-smoothing: antialiased; min-height: 100vh;
+        display: flex; flex-direction: column;
+      }
+      a { color: inherit; }
+
+      .bar { position: sticky; top: 0; z-index: 10; background: rgba(25,25,25,0.9); backdrop-filter: blur(8px); border-bottom: 1px solid rgba(255,255,255,0.08); }
+      .bar-inner { max-width: 48rem; margin: 0 auto; padding: 0.75rem 1rem; display: flex; align-items: center; justify-content: space-between; }
+      .back { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 600; letter-spacing: -0.01em; color: #fff; text-decoration: none; }
+      .back:hover { opacity: 0.8; }
+      .lang { display: flex; align-items: center; gap: 0.4rem; font-size: 0.875rem; }
+      .lang .on { font-weight: 600; color: #fff; }
+      .lang .off a { color: rgba(255,255,255,0.5); text-decoration: none; }
+      .lang .off a:hover { color: #fff; }
+      .lang .sep { color: rgba(255,255,255,0.2); }
+
+      main { flex: 1 0 auto; width: 100%; }
+      article { max-width: 48rem; margin: 0 auto; padding: 2.5rem 1rem 4rem; }
+      h1 { font-size: clamp(1.75rem, 4vw, 2.25rem); font-weight: 700; letter-spacing: -0.02em; margin: 0; color: #fff; }
+      .updated { margin: 0.5rem 0 0; font-size: 0.875rem; color: rgba(255,255,255,0.45); }
+
+      .legal { margin-top: 2rem; line-height: 1.7; color: rgba(255,255,255,0.78); }
+      .legal :global(h2) { margin: 2.25rem 0 0.75rem; font-size: 1.25rem; font-weight: 600; color: #fff; }
+      .legal :global(h3) { margin: 1.75rem 0 0.5rem; font-size: 1.05rem; font-weight: 600; color: #fff; }
+      .legal :global(p) { margin: 0 0 1rem; }
+      .legal :global(ul) { margin: 0 0 1rem; padding-left: 1.25rem; }
+      .legal :global(li) { margin: 0 0 0.5rem; }
+      .legal :global(strong) { color: #fff; font-weight: 600; }
+      .legal :global(a) { color: #34d399; text-decoration: none; }
+      .legal :global(a:hover) { text-decoration: underline; }
+      .legal :global(address) { font-style: normal; margin: 0.5rem 0 0; }
+
+      .foot { flex-shrink: 0; border-top: 1px solid rgba(255,255,255,0.08); }
+      .foot { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; max-width: 48rem; margin: 0 auto; padding: 1.5rem 1rem; font-size: 0.8125rem; color: rgba(255,255,255,0.4); }
+      .foot nav { display: flex; gap: 1rem; margin-left: auto; }
+      .foot nav a { color: rgba(255,255,255,0.4); text-decoration: none; }
+      .foot nav a:hover { color: #fff; text-decoration: underline; }
+    </style>
+  </body>
+</html>

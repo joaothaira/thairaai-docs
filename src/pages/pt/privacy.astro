@@ -1,0 +1,162 @@
+---
+import LegalPage from '../../components/LegalPage.astro';
+---
+
+<LegalPage
+  title="Política de Privacidade"
+  lastUpdated="28 de maio de 2026"
+  locale="pt"
+  altHref="/privacy"
+  description="Como o ThairaAI coleta, usa, armazena e protege seus dados pessoais sob a Lei Geral de Proteção de Dados (LGPD)."
+>
+  <h2>Quem Somos — Controlador dos Dados</h2>
+  <p>
+    Esta Política de Privacidade aplica-se ao uso do ThairaAI (thaira.ai), um assistente baseado em IA que se conecta ao
+    seu WhatsApp, Telegram, e-mail e agenda para ler mensagens recebidas e ajudar você a responder, agendar e gerenciar
+    suas comunicações. O serviço é operado pela <strong>THAIRAHUB TECNOLOGIA DA INFORMAÇÃO LTDA</strong>, inscrita no
+    CNPJ 64.477.587/0001-07, com sede na Rua Rio Grande do Norte, 1436, Sala 813, Savassi, Belo Horizonte/MG, CEP
+    30130-138, Brasil (&quot;ThairaAI&quot;, &quot;nós&quot;, &quot;Controlador&quot;).
+  </p>
+  <p>
+    Para os fins da Lei Geral de Proteção de Dados (LGPD), a THAIRAHUB TECNOLOGIA DA INFORMAÇÃO LTDA atua como
+    Controladora dos dados pessoais coletados e tratados por meio da plataforma.
+  </p>
+
+  <h2>1. Disponibilidade da Política</h2>
+  <p>
+    Esta Política de Privacidade é disponibilizada em página dedicada, em formato HTML, acessível a partir da página
+    inicial e de locais de destaque dentro do aplicativo, e será atualizada sempre que houver mudanças relevantes nas
+    práticas de tratamento de dados.
+  </p>
+
+  <h2>2. Quais Dados Pessoais Coletamos</h2>
+  <p>
+    <strong>2.1. Dados de cadastro</strong> — Ao criar uma conta, coletamos seu nome completo, endereço de e-mail e foto
+    de perfil, seja no login com Google ou com e-mail e senha (a autenticação é feita pelo Firebase Authentication, um
+    serviço do Google).
+  </p>
+  <p>
+    <strong>2.2. Dados de navegação e de uso/medição</strong> — Coletamos automaticamente seu endereço IP, tipo de
+    navegador, sistema operacional, identificadores de dispositivo, data e hora de acesso e registros de atividade. Para
+    operar e cobrar o serviço, também registramos a medição de uso de IA: número de requisições, contagem de tokens,
+    modelo utilizado e o custo associado.
+  </p>
+  <p>
+    <strong>2.3. Conteúdo das comunicações</strong> — Quando você conecta um canal (WhatsApp ou Telegram) ou uma conta
+    Google (Gmail e Google Agenda), tratamos as mensagens, e-mails e eventos de agenda necessários para gerar as
+    respostas e a assistência que você solicita. As mensagens e requisições de IA são roteadas pelo nosso gateway
+    gerenciado exclusivamente para produzir as respostas solicitadas.
+    <strong>Esse conteúdo não é usado para treinar modelos de IA.</strong>
+  </p>
+  <p>
+    <strong>2.4. Credenciais de contas conectadas</strong> — Para manter suas conexões ativas, armazenamos os tokens de
+    acesso e de atualização (OAuth) da sua conta Google (Gmail e Agenda) e as credenciais de sessão dos seus canais de
+    mensagens. Essas credenciais são armazenadas de forma criptografada e usadas apenas para manter a integração que
+    você autorizou.
+  </p>
+  <p>
+    <strong>2.5. Dados de cobrança</strong> — Ao assinar um plano pago, o Stripe processa seu pagamento. Armazenamos
+    metadados do pedido (valor, plano e data), mas nunca os dados completos do seu cartão.
+  </p>
+
+  <h2>3. Bases Legais e Finalidades do Tratamento</h2>
+  <p>Tratamos seus dados com base em:</p>
+  <ul>
+    <li><strong>Execução de contrato (Art. 7º, V, LGPD)</strong> — criar sua conta, conectar seus canais e contas, gerar respostas e assistência, processar pagamentos e prestar suporte;</li>
+    <li><strong>Legítimo interesse (Art. 7º, IX, LGPD)</strong> — segurança da plataforma, prevenção a fraudes, melhoria do serviço e medição e limitação de uso;</li>
+    <li><strong>Obrigação legal</strong> — retenção de registros fiscais conforme exigido pela legislação brasileira;</li>
+    <li><strong>Consentimento</strong> — para conectar suas contas Google e de mensagens, e para comunicações opcionais como novidades e dicas do produto.</li>
+  </ul>
+
+  <h2>4. Como Armazenamos os Dados Pessoais</h2>
+  <p>
+    Utilizamos o Google Cloud Platform (Cloud Run e Cloud SQL) hospedado nos Estados Unidos e o Firebase (Google) para
+    autenticação. As transferências internacionais de dados observam o Artigo 33 da LGPD. Os dados são protegidos com
+    criptografia TLS/SSL em trânsito e em repouso.
+  </p>
+
+  <h2>5. Com Quem Compartilhamos Dados</h2>
+  <p>Não vendemos seus dados pessoais. Podemos compartilhar dados com:</p>
+  <ul>
+    <li><strong>Google Cloud Platform</strong> — infraestrutura e armazenamento;</li>
+    <li><strong>Firebase (Google)</strong> — autenticação;</li>
+    <li><strong>Stripe</strong> — processamento de pagamentos;</li>
+    <li><strong>Provedores de mensagens</strong> — Meta (WhatsApp) e Telegram, conforme os canais que você optar por conectar;</li>
+    <li><strong>Provedores de IA</strong> — acessados por meio do nosso gateway gerenciado exclusivamente para gerar as respostas que você solicita; nenhum dado é usado para treinar modelos de IA.</li>
+  </ul>
+  <p>Todos os terceiros atuam como operadores de dados, sob obrigações contratuais em conformidade com a LGPD.</p>
+  <p>
+    <strong>Conectividade com o WhatsApp.</strong> A integração com o WhatsApp é fornecida por meio de uma API de
+    WhatsApp não oficial e de código aberto (baseada no projeto
+    <a href="https://github.com/code-chat-br/whatsapp-api" target="_blank" rel="noopener noreferrer">code-chat-br/whatsapp-api</a>
+    e na biblioteca Baileys), e não pela API oficial do WhatsApp Business. Suas mensagens do WhatsApp são, portanto,
+    processadas por um gateway auto-hospedado que operamos, e não pela API oficial do Business da Meta. Esse software não
+    é afiliado nem endossado pela WhatsApp LLC ou pela Meta Platforms, Inc.
+  </p>
+
+  <h2>6. Tratamento Automatizado</h2>
+  <p>
+    Utilizamos suas mensagens, e-mails, eventos de agenda e preferências para gerar respostas e sugestões com IA em seu
+    nome. Não são tomadas decisões totalmente automatizadas com efeitos jurídicos sobre você. Você continua responsável
+    por revisar e por qualquer mensagem enviada por meio do serviço.
+  </p>
+
+  <h2>7. Retenção e Exclusão de Dados</h2>
+  <p>
+    Os dados pessoais são tratados enquanto sua conta estiver ativa. Após o encerramento da conta, os dados podem ser
+    retidos por até 3 anos, conforme os prazos prescricionais do Código Civil brasileiro, ou por período maior quando
+    exigido por lei (por exemplo, registros de cobrança). A desconexão de um canal ou conta Google revoga as credenciais
+    armazenadas correspondentes.
+  </p>
+  <p>Você pode solicitar a exclusão dos seus dados a qualquer momento pelo e-mail <a href="mailto:agent@thairahub.com">agent@thairahub.com</a>.</p>
+
+  <h2>8. Segurança</h2>
+  <p>
+    As medidas de segurança incluem criptografia TLS/SSL em trânsito, tokens de acesso criptografados, controles de
+    acesso restrito e monitoramento contínuo de segurança.
+  </p>
+
+  <h2>9. Seus Direitos (LGPD, Art. 18)</h2>
+  <p>Você pode solicitar a qualquer momento, pelo e-mail <a href="mailto:agent@thairahub.com">agent@thairahub.com</a>:</p>
+  <ul>
+    <li>Confirmação de que tratamos seus dados;</li>
+    <li>Acesso aos seus dados pessoais;</li>
+    <li>Correção de dados incompletos ou inexatos;</li>
+    <li>Anonimização, bloqueio ou eliminação de dados desnecessários;</li>
+    <li>Portabilidade dos dados;</li>
+    <li>Informação sobre os terceiros com quem compartilhamos dados;</li>
+    <li>Revogação do consentimento;</li>
+    <li>Revisão de decisões automatizadas.</li>
+  </ul>
+  <p>Responderemos em até 5 dias úteis.</p>
+
+  <h2>10. Cookies e Análises</h2>
+  <p>
+    Podemos usar o Google Analytics para coletar informações anonimizadas sobre tendências de uso. Nenhum nome, e-mail
+    ou telefone é coletado pelo Google Analytics. Você pode desativar nas configurações do seu navegador.
+  </p>
+
+  <h2>11. Privacidade de Crianças</h2>
+  <p>
+    O ThairaAI não é direcionado a menores de 18 anos. Não coletamos intencionalmente dados pessoais de menores. Se você
+    acredita que um menor nos forneceu dados, entre em contato pelo e-mail <a href="mailto:agent@thairahub.com">agent@thairahub.com</a>.
+  </p>
+
+  <h2>12. Alterações nesta Política</h2>
+  <p>
+    Notificaremos os usuários sobre alterações significativas pela plataforma ou por e-mail. O uso continuado após as
+    alterações constitui aceitação da Política atualizada.
+  </p>
+
+  <h2>13. Encarregado pelo Tratamento de Dados (DPO)</h2>
+  <p>Para exercer seus direitos sob a LGPD, entre em contato com nosso Encarregado pelo Tratamento de Dados Pessoais:</p>
+  <address>
+    <p>
+      <strong>Nome:</strong> João Vitor de Oliveira<br />
+      <strong>E-mail:</strong> <a href="mailto:agent@thairahub.com">agent@thairahub.com</a><br />
+      <strong>Empresa:</strong> THAIRAHUB TECNOLOGIA DA INFORMAÇÃO LTDA<br />
+      <strong>CNPJ:</strong> 64.477.587/0001-07<br />
+      <strong>Endereço:</strong> Rua Rio Grande do Norte, 1436, Sala 813, Savassi, Belo Horizonte/MG, CEP 30130-138, Brasil
+    </p>
+  </address>
+</LegalPage>

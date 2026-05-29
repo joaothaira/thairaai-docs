@@ -1,0 +1,276 @@
+---
+title: Fluxo de Onboarding Agent → Team
+description: Como uma conversa de agente solo detecta uma tarefa multi-domínio, obtém o consentimento do usuário e inicializa uma equipe multi-agente — de ponta a ponta entre o agente, o servidor MCP e o renderer.
+---
+
+Um único agente é ótimo para trabalho focado, mas algumas solicitações abrangem várias especialidades de uma vez (frontend + backend + banco de dados + DevOps). Esta página traça como o ThairaAI transforma uma conversa solo normal em uma **equipe multi-agente**: o agente reconhece a oportunidade, pergunta ao usuário e — somente com o consentimento — cria a equipe e leva o usuário até ela. O fluxo toca três camadas (agente solo, o servidor MCP in-process, o renderer), então os diagramas abaixo acompanham uma solicitação do começo ao fim.
+
+## Diagrama de fluxo completo
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          USER  (conversa normal de Agent)                    │
+└─────────────────┬───────────────────────────────────────────────────────────┘
+                  │
+                  │ ① Envia uma mensagem: "Me ajude a construir um site de
+                  │    e-commerce completo, incluindo frontend, backend,
+                  │    design de banco de dados e plano de implantação"
+                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         SOLO AGENT  (ACP Session)                            │
+│                                                                             │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │ System Prompt (regras de onboarding injetadas)                     │     │
+│  │                                                                    │     │
+│  │  "Você é o assistente Aion. Quando a solicitação do usuário        │     │
+│  │   abrange múltiplos domínios especializados (frontend/backend/     │     │
+│  │   arquitetura/testes/design, etc.) e a colaboração paralela        │     │
+│  │   melhoraria significativamente a eficiência, você deve sugerir    │     │
+│  │   que o usuário ative o modo de equipe (team mode).                │     │
+│  │   Critérios de decisão:                                            │     │
+│  │   - A tarefa pode ser dividida em 2+ subdomínios independentes     │     │
+│  │   - Há espaço para paralelismo entre as subtarefas                 │     │
+│  │   - Concluir com um único Agent leva muito mais tempo do que       │     │
+│  │     a colaboração multi-Agent                                      │     │
+│  │   Ao sugerir, explique: por que recomenda e como a equipe          │     │
+│  │   dividiria o trabalho.                                            │     │
+│  │   Depois que o usuário concordar, chame a ferramenta               │     │
+│  │   aion_create_team."                                               │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+│  ② O Agent analisa a solicitação → decide: envolve frontend+backend+        │
+│     banco de dados+DevOps, uma boa opção para um Team                        │
+│                                                                             │
+└─────────────────┬───────────────────────────────────────────────────────────┘
+                  │
+                  │ ③ Responde ao usuário (sugestão em linguagem natural)
+                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  AGENT → USER:                                                              │
+│                                                                             │
+│  "Analisei sua solicitação — este é um projeto complexo que abrange         │
+│   múltiplos domínios:                                                       │
+│   - Engenharia de frontend (React/UI)                                       │
+│   - Serviços de backend (API/lógica de negócio)                             │
+│   - Design de banco de dados (Schema/índices)                               │
+│   - Plano de implantação (CI/CD/infraestrutura)                             │
+│                                                                             │
+│   Acho que montar uma equipe seria mais eficiente — vários Agents           │
+│   especializados podem trabalhar em paralelo.                               │
+│   Quer que eu ative o modo de equipe para concluir esta tarefa?"            │
+└─────────────────┬───────────────────────────────────────────────────────────┘
+                  │
+                  │ ④ Usuário responde: "Claro, ative o modo de equipe"
+                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    AGENT chama a MCP Tool: aion_create_team                  │
+│                                                                             │
+│  Tool Input:                                                                │
+│  {                                                                          │
+│    "summary": "Construir um site de e-commerce completo, incluindo:         │
+│                1) Frontend React (exibição de produtos/carrinho/checkout)   │
+│                2) Backend Node.js (RESTful API/autenticação/pagamentos)     │
+│                3) Design de banco PostgreSQL (usuários/produtos/pedidos)    │
+│                4) Plano de implantação Docker + CI/CD",                     │
+│    "name": "Desenvolvimento full-stack de e-commerce" ← opcional, o Agent   │
+│                                                          nomeia              │
+│  }                                                                          │
+└─────────────────┬───────────────────────────────────────────────────────────┘
+                  │
+                  ▼
+┌═══════════════════════════════════════════════════════════════════════════════┐
+║                  MCP SERVER  (roda dentro do processo principal)             ║
+║                                                                             ║
+║  ┌─── handler aion_create_team ───────────────────────────────────────┐     ║
+║  │                                                                    │     ║
+║  │  1. Recebe summary + name                                          │     ║
+║  │                                                                    │     ║
+║  │  2. Monta os parâmetros de createTeam                              │     ║
+║  │     {                                                              │     ║
+║  │       userId: currentUserId,                                       │     ║
+║  │       name: "Desenvolvimento full-stack de e-commerce",            │     ║
+║  │       workspace: "",              // atribuído automaticamente     │     ║
+║  │       workspaceMode: "shared",                                     │     ║
+║  │       agents: [{                                                   │     ║
+║  │         slotId: "slot-xxx",                                        │     ║
+║  │         role: "lead",                                              │     ║
+║  │         agentType: "acp",         // tipo lead padrão              │     ║
+║  │         agentName: "Team Lead",                                    │     ║
+║  │         ...                                                        │     ║
+║  │       }]                                                           │     ║
+║  │     }                                                              │     ║
+║  │                                                                    │     ║
+║  │  3. Chama TeamSessionService.createTeam(params)                    │     ║
+║  │     → gera teamId (UUID)                                           │     ║
+║  │     → cria a conversation do lead agent                            │     ║
+║  │     → persiste no SQLite                                           │     ║
+║  │                                                                    │     ║
+║  │  4. Chama TeamSessionService.getOrStartSession(teamId)             │     ║
+║  │     → cria a TeamSession                                           │     ║
+║  │     → inicia o Team MCP Server                                     │     ║
+║  │     → injeta a config de MCP nas conversations dos agents          │     ║
+║  │                                                                    │     ║
+║  │  5. Envia a primeira mensagem ao lead agent (resumo da solicitação)│     ║
+║  │     ipcBridge.team.sendMessage.invoke({                            │     ║
+║  │       teamId,                                                      │     ║
+║  │       content: summary    // resumo como 1ª diretiva do lead       │     ║
+║  │     })                                                             │     ║
+║  │                                                                    │     ║
+║  │  6. Retorna o resultado                                            │     ║
+║  │     {                                                              │     ║
+║  │       teamId: "abc-123-def",                                       │     ║
+║  │       name: "Desenvolvimento full-stack de e-commerce",            │     ║
+║  │       route: "/team/abc-123-def",                                  │     ║
+║  │       leadAgent: "Team Lead",                                      │     ║
+║  │       status: "session_started"                                    │     ║
+║  │     }                                                              │     ║
+║  └────────────────────────────────────────────────────────────────────┘     ║
+║                                                                             ║
+╚═══════════════════════════════════════════════════════════════════════════════┘
+                  │
+                  │ ⑤ MCP retorna as informações do Team
+                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      SOLO AGENT  (recebe o resultado do MCP)                 │
+│                                                                             │
+│  O Agent sabe que o Team foi criado e precisa guiar o usuário até ele        │
+│                                                                             │
+│  ⑥ Chama a MCP Tool: aion_navigate                                         │
+│     { "route": "/team/abc-123-def" }                                        │
+│                                                                             │
+│  E responde ao usuário:                                                     │
+│  "Montei a equipe 'Desenvolvimento full-stack de e-commerce' para você,     │
+│   redirecionando agora... 🚀"                                               │
+│                                                                             │
+└─────────────────┬───────────────────────────────────────────────────────────┘
+                  │
+                  ▼
+┌═══════════════════════════════════════════════════════════════════════════════┐
+║                  MCP SERVER: handler aion_navigate                          ║
+║                                                                             ║
+║  1. Valida a rota (allowlist: /team/:id, /conversation/:id, ...)           ║
+║                                                                             ║
+║  2. Notifica o Renderer a navegar via IPC                                  ║
+║     ipcBridge.deepLink.received.emit({                                      ║
+║       action: "navigate",                                                   ║
+║       params: { route: "/team/abc-123-def" }                                ║
+║     })                                                                      ║
+║                                                                             ║
+║  3. Retorna { success: true }                                              ║
+╚═══════════════════════════════════════════════════════════════════════════════┘
+                  │
+                  │ ⑦ IPC emit → Renderer
+                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           RENDERER  (frontend)                               │
+│                                                                             │
+│  O hook useDeepLink() recebe o evento deepLink.received                     │
+│  action === "navigate" → navigate("/team/abc-123-def")                      │
+│                                                                             │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │  React Router corresponde a /team/:id                              │     │
+│  │  → carrega TeamIndex (lazy)                                        │     │
+│  │  → busca o team via ipcBridge.team.get                             │     │
+│  │  → renderiza TeamPage                                              │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │  hook useTeamSession(team)                                         │     │
+│  │  → a session foi pré-iniciada no handler do MCP, reusada direto    │     │
+│  │  → assina os eventos agentStatusChanged / agentSpawned / agentRemoved │  │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+└─────────────────┬───────────────────────────────────────────────────────────┘
+                  │
+                  │ ⑧ renderização da página concluída
+                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        TEAM PAGE  (o que o usuário vê)                       │
+│                                                                             │
+│  ┌──────────────────────────────────────────────────────────────┐           │
+│  │                                                              │           │
+│  │  📋 Desenvolvimento full-stack de e-commerce                 │           │
+│  │                                                              │           │
+│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐           │           │
+│  │  │ Lead ★  │ │Frontend │ │Backend  │ │  DBA    │  ← spawn   │           │
+│  │  │(traba-  │ │(aguar-  │ │(aguar-  │ │(aguar-  │  sob       │           │
+│  │  │ lhando) │ │ dando)  │ │ dando)  │ │ dando)  │  demanda   │           │
+│  │  └─────────┘ └─────────┘ └─────────┘ └─────────┘           │           │
+│  │                                                              │           │
+│  │  Lead Agent:                                                 │           │
+│  │  "Tarefa recebida. Vou dividir e atribuir:                   │           │
+│  │   1. @Frontend → páginas React de produtos/carrinho/checkout │           │
+│  │   2. @Backend  → serviço de API Node.js/auth/integração pagto│           │
+│  │   3. @DBA      → design do Schema PostgreSQL                 │           │
+│  │   Deixe-me criar os membros da equipe primeiro..."           │           │
+│  │                                                              │           │
+│  └──────────────────────────────────────────────────────────────┘           │
+│                                                                             │
+│  ✅ O usuário vê o Team já trabalhando — nenhuma ação manual necessária      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Diagrama de sequência
+
+```
+ User          Renderer        Solo Agent       MCP Server       Main Process       Team Lead
+  │               │                │                │                 │                  │
+  │──① envia msg─▶│───── IPC ─────▶│                │                 │                  │
+  │               │                │                │                 │                  │
+  │               │                │─② analisa ──┐  │                 │                  │
+  │               │                │  serve p/Team│  │                 │                  │
+  │               │                │◀────────────┘  │                 │                  │
+  │               │                │                │                 │                  │
+  │◀──③ sugere─── │◀──────────────│                │                 │                  │
+  │  "sugiro                       │                │                 │                  │
+  │   ativar o                     │                │                 │                  │
+  │   modo equipe"                 │                │                 │                  │
+  │               │                │                │                 │                  │
+  │──④ "Claro"──▶│───── IPC ─────▶│                │                 │                  │
+  │               │                │                │                 │                  │
+  │               │                │──⑤ call ──────▶│                 │                  │
+  │               │                │ aion_create_   │── createTeam ──▶│                  │
+  │               │                │ team           │                 │─ grava no DB     │
+  │               │                │                │                 │─ cria Session    │
+  │               │                │                │                 │─ inicia MCP Server│
+  │               │                │                │◀── team info ──│                  │
+  │               │                │                │                 │                  │
+  │               │                │                │── sendMessage ─▶│────── IPC ──────▶│
+  │               │                │                │   (resumo)      │                  │─ começa
+  │               │                │◀─⑥ return ────│                 │                  │  a trabalhar
+  │               │                │  {teamId,      │                 │                  │
+  │               │                │   route}       │                 │                  │
+  │               │                │                │                 │                  │
+  │               │                │──⑦ call ──────▶│                 │                  │
+  │◀─ "redirecio- │               │ aion_navigate  │── deepLink ────▶│                  │
+  │    nando"     │                │                │   emit          │                  │
+  │               │◀───────────────│────────────────│── IPC emit ────│                  │
+  │               │                │                │                 │                  │
+  │               │─⑧ navigate ──┐│                │                 │                  │
+  │               │  /team/:id   ││                │                 │                  │
+  │               │◀─────────────┘│                │                 │                  │
+  │               │                │                │                 │                  │
+  │  ┌────────────▼────────────┐  │                │                 │                  │
+  │  │  ⑨ Team Page renderiza  │  │                │                 │    ┌─────────────▼┐
+  │  │  Lead Agent já trabalha  │  │                │                 │    │ divide tarefas│
+  │  │  usuário vê o progresso  │  │                │                 │    │ spawn membros │
+  │  └─────────────────────────┘  │                │                 │    │ atribui tarefa│
+  │               │                │                │                 │    └───────────────┘
+```
+
+## Módulos envolvidos
+
+| #   | Módulo                | Local                                              | Responsabilidade                                        |
+| --- | --------------------- | -------------------------------------------------- | ------------------------------------------------------- |
+| 1   | **Team Guide Prompt** | `src/process/resources/prompts/teamGuidePrompt.ts` | As regras de onboarding de equipe injetadas no solo agent |
+| 2   | **Aion MCP Server**   | `src/process/services/aionMcpServer.ts`            | MCP in-process que fornece `aion_create_team` + `aion_navigate` |
+| 3   | **Registro de MCP**   | `src/process/agent/acp/mcpSessionConfig.ts`        | Registra o Aion MCP na session do solo agent            |
+| 4   | **Extensão DeepLink** | `src/renderer/hooks/system/useDeepLink.ts`         | Trata a action `navigate`, suporta navegação a qualquer rota |
+
+## Limites e restrições
+
+- **O Agent nunca cria um Team automaticamente** — precisa primeiro obter o consentimento do usuário.
+- **Allowlist de rotas** — `aion_navigate` só permite navegação para rotas conhecidas (`/team/:id`, `/conversation/:id`).
+- **Qualidade do resumo** — o summary do Agent determina diretamente o quão bem o Lead Agent entende a tarefa; o prompt precisa guiá-lo a produzir um resumo estruturado.
+- **Fallback** — quando o usuário recusa o modo de equipe, o Agent continua a concluir a tarefa normalmente em modo solo.

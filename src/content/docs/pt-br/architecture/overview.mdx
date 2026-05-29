@@ -1,0 +1,92 @@
+---
+title: Visão Geral da Arquitetura
+description: O modelo Electron multi-processo do ThairaAI, o IPC bridge, os quatro modos de execução e os serviços principais — o modelo mental que um contribuidor precisa primeiro.
+---
+
+O ThairaAI (codinome AionUi) é um app desktop Electron. Antes de mergulhar em qualquer funcionalidade isolada, ajuda entender as **fronteiras entre processos** e **como as partes conversam entre si**, porque quase toda regra na base de código decorre disso.
+
+## Modelo multi-processo
+
+O Electron divide um app em processos isolados, cada um com APIs diferentes disponíveis. O ThairaAI usa três tipos:
+
+- **Processo principal (main)** (`src/process/`, `src/index.ts`) — lógica da aplicação, banco de dados, tratamento de IPC. Tem APIs de Node.js + Electron, **sem DOM**.
+- **Processo de renderização (renderer)** (`src/renderer/`) — a UI React. Tem DOM, **sem APIs de Node.js**.
+- **Processos worker** (`src/process/worker/`) — tarefas de IA em segundo plano (workers gemini, codex, acp). Node.js, **sem APIs de Electron**.
+
+A regra de ouro: **nunca misture as APIs de dois tipos de processo.** Um arquivo do renderer não pode `import fs`; um arquivo do processo principal não pode tocar o DOM. Tudo que precisa cruzar a fronteira passa pelo IPC bridge.
+
+## Por que um IPC bridge
+
+O renderer é isolado em sandbox por segurança — não consegue acessar o sistema de arquivos, criar processos ou abrir o banco de dados diretamente. Em vez disso, ele chama **canais tipados** expostos por um script de preload, e o processo principal faz o trabalho privilegiado em seu nome. É por isso que você verá um "bridge" para quase toda capacidade.
+
+- **Script de preload**: `src/preload.ts` expõe uma API segura de `contextBridge` ao renderer.
+- **Definições de tipo de mensagem**: `src/renderer/messages/`.
+- Todos os canais de IPC são **tipados** — ao adicionar um canal, adicione-o tanto no preload quanto no diretório de messages, para que o renderer e o processo principal concordem sobre o formato.
+
+## Servidor WebUI
+
+Localizado em `src/process/webserver/`.
+
+- Express + WebSocket para comunicação em tempo real.
+- Autenticação JWT para acesso remoto.
+- Permite que clientes na rede acessem a UI do agente remotamente, não apenas a janela Electron local.
+
+## Modos de execução
+
+O ThairaAI pode rodar em quatro modos. O insight-chave: **o canal WebSocket é o equivalente, no lado do navegador, ao IPC do Electron** — ambos os transportes chegam aos mesmos handlers de bridge e serviços, então o código de funcionalidade raramente precisa saber em qual transporte está.
+
+```
+start / cli  (Electron desktop)
+┌─────────────────────────────────────────────────────┐
+│  Janela Electron          Navegador (WebUI opcional)│
+│      │                          │                   │
+│      │ IPC                      │ WebSocket         │
+│      ▼                          ▼                   │
+│       handlers de bridge / serviços / DB            │
+└─────────────────────────────────────────────────────┘
+
+webui  (Electron, sem janela)
+┌─────────────────────────────────────────────────────┐
+│  (sem janela Electron)    Navegador                 │
+│                                  │                  │
+│                                  │ WebSocket        │
+│                                  ▼                  │
+│       handlers de bridge / serviços / DB            │
+│       + API Electron completa (fsBridge, cronBridge,│
+│         mcpBridge, notificationBridge …)            │
+└─────────────────────────────────────────────────────┘
+
+server  (Node.js puro, sem Electron)
+┌─────────────────────────────────────────────────────┐
+│  (sem janela Electron)    Navegador                 │
+│                                  │                  │
+│                                  │ WebSocket        │
+│                                  ▼                  │
+│       handlers de bridge / serviços / DB            │
+│       (10 bridges exclusivos do Electron            │
+│        indisponíveis: fsBridge, cronBridge,         │
+│        mcpBridge, dialogBridge, shellBridge,        │
+│        applicationBridge, windowControlsBridge,     │
+│        updateBridge, webuiBridge, notificationBridge)│
+└─────────────────────────────────────────────────────┘
+```
+
+Fluxo de autenticação (modos WebUI / server):
+
+1. `POST /login` → token JWT.
+2. Conecta o WebSocket com o token (verificado no handshake).
+3. Todas as chamadas de bridge trafegam pela conexão WebSocket.
+
+## Sistema de cron
+
+Localizado em `src/process/services/cron/`.
+
+- Baseado na biblioteca `croner`.
+- `CronService`: o motor de agendamento de tarefas.
+- `CronBusyGuard`: previne a execução concorrente do mesmo job.
+
+## Para onde ir em seguida
+
+- **[Detecção e Conexão de Agentes ACP](/pt-br/architecture/acp-detector)** — como o ThairaAI descobre agentes de CLI e por que conversa com eles através de adaptadores.
+- **[Fila de Comandos e Máquina de Estados do ACP](/pt-br/architecture/command-queue-and-acp-state)** — como as mensagens do usuário são bufferizadas e como o ciclo de vida de uma conexão de backend é gerenciado.
+- **[Fluxo de Onboarding Agent → Team](/pt-br/architecture/team-onboarding-flow)** — como uma conversa de agente solo se torna uma equipe multi-agente.

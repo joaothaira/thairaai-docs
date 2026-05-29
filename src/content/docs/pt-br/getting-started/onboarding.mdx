@@ -1,0 +1,88 @@
+---
+title: Onboarding
+description: A configuração guiada do primeiro uso que conecta sua conta, e-mail, agenda e WhatsApp.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+Na primeira vez que você abre o ThairaAI, um onboarding guiado em tela cheia conduz você por tudo o que
+precisa para começar — sua conta, termos, aparência, e-mail e agenda, e (opcionalmente) o WhatsApp.
+Ele aparece apenas uma vez; você pode revisitar qualquer parte depois em **Configurações**.
+
+## As etapas
+
+<Steps>
+
+1. **Criar conta**
+
+   Crie sua conta ThairaAI. **Continuar com o Google** é o caminho mais rápido: um único consentimento
+   do Google faz login na nuvem gerenciada **e** conecta seu Gmail e Google Agenda ao mesmo tempo — você
+   nunca precisa autorizar o Google duas vezes. Também é possível criar conta com e-mail e senha.
+
+2. **Termos e Privacidade**
+
+   Revise e aceite os Termos de Uso e a Política de Privacidade antes de continuar.
+
+3. **Aparência**
+
+   Escolha o modo claro ou escuro (o onboarding começa no escuro). Você pode mudar quando quiser nas
+   Configurações.
+
+4. **E-mail e Agenda**
+
+   Conecte o Gmail e o Google Agenda para o assistente ler seus e-mails e gerenciar seus compromissos.
+   Se você criou a conta com o Google, isso já está conectado.
+
+   <Aside type="tip">
+   O assistente lê seu Google Agenda para saber quando você está livre, então basta bloquear os horários
+   indisponíveis (almoço, noites, folgas) diretamente na agenda — não há um campo separado de "horário de
+   funcionamento" para manter.
+   </Aside>
+
+5. **WhatsApp**
+
+   Conecte o WhatsApp para o assistente responder por você. Esta etapa é um pequeno assistente próprio —
+   veja abaixo. Você pode pular e configurar depois.
+
+</Steps>
+
+## WhatsApp: o modelo de dois números
+
+O onboarding do WhatsApp é um pequeno assistente guiado porque envolve dois números diferentes:
+
+- **Número comercial** — a linha do WhatsApp que roda o ThairaAI. Seus clientes mandam mensagem e uma
+  recepcionista de IA responde por você.
+- **Seu número pessoal** — a linha que *você* usa para falar com o assistente (ler e-mail, ver a agenda,
+  etc.) com acesso total.
+
+O assistente segue esta ordem:
+
+<Steps>
+
+1. **Como funciona** — uma explicação rápida do modelo de dois números.
+
+2. **Perfil comercial** *(opcional)* — nome do negócio, nome do profissional e uma mensagem de
+   boas-vindas. Preencher isso ativa o **Modo Comercial** *antes* do seu WhatsApp comercial entrar no ar,
+   então novos contatos são recebidos pela recepcionista em vez de receberem um código de configuração.
+
+3. **Seu número pessoal** — informado aqui e registrado como **dono** (acesso total). Depois que seu
+   WhatsApp comercial conecta, uma mensagem de confirmação é enviada para este número.
+
+4. **Conectar (QR)** — escaneie o QR code com o celular que usa seu número **comercial**. Esta é a última
+   etapa, então quando a linha entra no ar tudo o mais já está configurado.
+
+</Steps>
+
+<Aside type="note">
+O ThairaAI distingue dois papéis automaticamente. O **dono** (seu número pessoal) fala com o assistente
+completo. Contatos comerciais são aprovados automaticamente como **clientes** e recebem a experiência da
+recepcionista — eles nunca recebem um código de pareamento. Você pode ver e gerenciar ambos em
+**Configurações → WhatsApp → Usuários Autorizados**, onde cada contato exibe um selo **Dono** ou
+**Cliente**.
+</Aside>
+
+## O que ver em seguida
+
+- [Canal WhatsApp](/pt-br/features/whatsapp/) — como a recepcionista e o modo comercial funcionam
+- [Gmail e Agenda](/pt-br/google/overview/) — o que o assistente faz com seu e-mail e agenda
+- [Gateway de IA Gerenciado](/pt-br/architecture/managed-gateway/) — como o login na nuvem e a medição funcionam

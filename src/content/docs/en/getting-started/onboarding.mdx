@@ -1,0 +1,86 @@
+---
+title: Onboarding
+description: The guided first-run setup that connects your account, email, calendar, and WhatsApp.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+The first time you open ThairaAI, a full-screen guided onboarding walks you through everything you
+need to get productive — your account, terms, appearance, email & calendar, and (optionally) WhatsApp.
+It only appears once; you can revisit any of it later in **Settings**.
+
+## The steps
+
+<Steps>
+
+1. **Sign up**
+
+   Create your ThairaAI account. **Continue with Google** is the fastest path: a single Google
+   consent signs you into the managed cloud **and** connects your Gmail and Google Calendar at the same
+   time — you'll never be asked to authorize Google twice. You can also sign up with email and password.
+
+2. **Terms & Privacy**
+
+   Review and accept the Terms of Service and Privacy Policy before continuing.
+
+3. **Appearance**
+
+   Pick light or dark mode (onboarding starts in dark). You can change it anytime in Settings.
+
+4. **Email & Agenda**
+
+   Connect Gmail and Google Calendar so the assistant can read your email and manage your schedule. If
+   you signed up with Google, this is already connected.
+
+   <Aside type="tip">
+   The assistant reads your Google Calendar to know when you're free, so just block your unavailable
+   times (lunch, nights, days off) directly in the calendar — there's no separate "business hours" field
+   to maintain.
+   </Aside>
+
+5. **WhatsApp**
+
+   Connect WhatsApp so the assistant can answer on your behalf. This step is its own short wizard — see
+   below. You can skip it and set it up later.
+
+</Steps>
+
+## WhatsApp: the two-number model
+
+WhatsApp onboarding is a small guided wizard because it involves two different numbers:
+
+- **Business number** — the WhatsApp line that runs ThairaAI. Your clients message it and an AI
+  receptionist answers on your behalf.
+- **Your personal number** — the line *you* use to chat with the assistant (read email, check your
+  agenda, etc.) with full access.
+
+The wizard runs in this order:
+
+<Steps>
+
+1. **How it works** — a quick explanation of the two-number model.
+
+2. **Business profile** *(optional)* — your business name, professional name, and a welcome message.
+   Completing this turns on **Business Mode** *before* your business WhatsApp goes live, so new contacts
+   are greeted by the receptionist instead of receiving a setup code.
+
+3. **Your personal number** — entered here and registered as the **owner** (full access). After your
+   business WhatsApp links, a confirmation message is sent to this number.
+
+4. **Connect (QR)** — scan the QR code with the phone that uses your **business** number. This is the
+   last step, so by the time the line is live everything else is already configured.
+
+</Steps>
+
+<Aside type="note">
+ThairaAI distinguishes two roles automatically. The **owner** (your personal number) talks to the full
+assistant. Business contacts are auto-approved as **clients** and get the receptionist experience — they
+never receive a pairing code. You can see and manage both under **Settings → WhatsApp → Authorized
+Users**, where each contact shows an **Owner** or **Client** badge.
+</Aside>
+
+## What to try next
+
+- [WhatsApp Channel](/features/whatsapp/) — how the receptionist and business mode work
+- [Gmail & Calendar](/google/overview/) — what the assistant can do with your email and agenda
+- [Managed AI Gateway](/architecture/managed-gateway/) — how cloud sign-in and metering work
