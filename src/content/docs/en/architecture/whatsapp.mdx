@@ -1,7 +1,6 @@
 ---
 title: WhatsApp Channel Architecture
 description: Internal design of the WhatsApp integration for contributors.
-draft: true
 ---
 
 This page covers the internal design of the WhatsApp integration for contributors.
@@ -162,6 +161,8 @@ Authorized client sends message while chat is paused by the professional
 | `src/process/task/GeminiAgentManager.ts` | Same WA command detection. `disableTools` support. |
 | `src/process/task/AionrsManager.ts` | Same WA command detection. |
 | `package.json` | Added `concurrently` devDependency. New scripts: `start:wa`, `start:wa:whisper`. |
+
+> **Note — Gemini agent removed.** The file lists above are the original WhatsApp business-mode changelog. ThairaAI has since deleted the Gemini agents (`GeminiAgentManager`, `GeminiDirectAgent`, `src/process/agent/gemini/**`, `src/process/worker/gemini.ts`). The business-client receptionist is now **`ThairaGatewayAgent`** (`src/process/task/directAgent/ThairaGatewayAgent.ts`, conversation type `thaira-gateway`), the interactive owner/desktop agent is **`AionrsManager`**, and the calendar toolset moved to `src/process/task/directAgent/calendarTools.ts`. Where the sections below reference a Gemini class, read it as its current equivalent.
 
 ## Design decisions
 
@@ -415,7 +416,7 @@ RESTRICTIONS (calendar configured):
 
 When the dedicated appointment calendar is **not** configured, the prompt instead instructs the AI to skip `google_list_events` entirely (since reading the primary calendar would leak private agenda data).
 
-`GeminiDirectAgent` extracts the `[System context:…]` block via regex (`/^\[System context:\n([\s\S]*?)\n\]\n\n([\s\S]*)$/`), stores the captured text as `this.systemPrompt`, and passes it as `config.systemInstruction` to `ai.models.generateContentStream()`. The clean user text (without the context wrapper) is what gets stored in conversation history. This makes the persona a formal system instruction rather than a user-turn prefix, improving adherence.
+`ThairaGatewayAgent` extracts the `[System context:…]` block via regex (`/^\[System context:\n([\s\S]*?)\n\]\n\n([\s\S]*)$/`), stores the captured text as `this.systemPrompt`, and prepends it as a `{ role: 'system' }` message on the OpenAI-compatible `/v1/chat/completions` request. The clean user text (without the context wrapper) is what gets stored in conversation history. This makes the persona a formal system instruction rather than a user-turn prefix, improving adherence.
 
 ### Client access isolation
 
@@ -448,8 +449,7 @@ workerTaskManager.getOrBuildTask(conversationId, {
 `BuildConversationOptions.disableTools` propagates to every agent type:
 
 - **ACP (Claude Code CLI):** `AcpAgent.loadBuiltinSessionMcpServers()` returns `[]` immediately when `disableTools: true`, so no MCP server (Gmail, Drive, etc.) is injected into the session. `applySessionMode(bypassPermissions)` is also skipped, so the subprocess retains its default permission mode.
-- **Gemini (CLI path):** `mcpServers` is overridden to `{}` and `yoloMode` forced `false` before the worker forks.
-- **Gemini (direct API path):** When `disableTools: true`, the factory creates a `GeminiDirectAgent` instead of `GeminiAgentManager`. `GeminiDirectAgent` calls the Gemini REST API directly with no CLI, no MCP, no tool scaffolding — just streaming content generation. It maintains an in-memory conversation history (capped at 40 turns) and emits events to both the IPC bridge and `channelEventBus` so messages persist to the local SQLite DB and stream to the UI in real time.
+- **Business-client receptionist (`thaira-gateway`):** Business clients (`role === 'client'`) are never routed to a tool-capable agent at all. The gateway dispatcher gives them their own conversation type, `thaira-gateway`, whose factory builds a `ThairaGatewayAgent` — a no-CLI agent that streams OpenAI-compatible `/v1/chat/completions` from the managed gateway with no MCP, no shell, and no file access (only a hardcoded calendar toolset, see below). It maintains an in-memory conversation history (capped at 40 turns) and emits events through `emitAgentEvent` so messages persist to the local SQLite DB and stream to the UI in real time. (Before the Gemini agent was removed this role was served by `GeminiDirectAgent`, a behavior-for-behavior predecessor that called the Gemini API directly.)
 
 #### Layer 3 — Permission request interception
 
@@ -516,24 +516,24 @@ Three ways to toggle the exclusion:
 | **Settings list** | Admin | Settings → Channels → WhatsApp → authorized users list (per-user Switch) |
 | **In-chat command** | Client or professional in the WhatsApp chat | `/pause` to add, `/resume` to remove |
 
-### GeminiDirectAgent
+### ThairaGatewayAgent
 
-`src/process/task/GeminiDirectAgent.ts` is a lightweight `IAgentManager` implementation for business-client Gemini sessions. It does **not** disable tool calls — instead it declares a narrow, hardcoded toolset and executes those calls in-process, bypassing both the Gemini CLI and the MCP subprocess.
+`src/process/task/directAgent/ThairaGatewayAgent.ts` is a lightweight `IAgentManager` implementation for business-client receptionist sessions (conversation type `thaira-gateway`). It does **not** disable tool calls — instead it declares a narrow, hardcoded calendar toolset and executes those calls in-process, with no CLI and no MCP subprocess. It is the successor to the removed `GeminiDirectAgent`: same behavior, but the transport is the managed Thaira gateway (OpenAI-compatible) instead of the Gemini API, so every reply is metered.
 
 Key properties:
-- **No subprocess** — calls `@google/genai` `generateContentStream` directly in-process.
-- **In-memory history** — maintains `Array<{ role, parts }>` (supporting `text`, `functionCall`, and `functionResponse` parts) capped at 40 turns to bound memory.
-- **API key resolution** — uses `model.apiKey` if set; falls back to `process.env.GEMINI_API_KEY`. The explicit value is always passed to `GoogleGenAI({ apiKey })` so other agents' `prepareEnvironment()` calls that clear the env var do not affect this agent.
-- **System instruction extraction** — on each `sendMessage` call, strips the `[System context:\n…\n]` prefix injected by `ChannelMessageService`, stores the extracted text as `this.systemPrompt`, and passes it as `config.systemInstruction` in the API call. The clean user text is stored in history.
-- **Hardcoded function declarations** — every request includes a `tools: CALENDAR_TOOLS` config with three function declarations: `google_auth_status`, `google_create_event`, and `google_list_events`. Gemini cannot call any other tools; there is no MCP, no shell, no file read.
-- **Multi-turn tool loop** — `sendMessage()` runs a `while (continueLoop && toolTurns < MAX_TOOL_TURNS)` loop. Each iteration streams a response; if any `functionCall` parts arrive they're executed via `executeTool()` (which dispatches to `googleIntegrationService.getStatus()` / `createEvent()` / `listEvents()`, the latter two using `getAppointmentCalendarId()` to read from `google.integration.appointmentCalendarId`, falling back to `'primary'`). The results are appended to history as `functionResponse` parts and the loop continues until Gemini stops calling tools. Cap is 5 turns to prevent runaway loops.
-- **User-message persistence** — immediately after the system-context extraction, the agent calls `addMessage(conversation_id, { type: 'text', position: 'right', … })` so the client's incoming message appears in the chat UI alongside replies. (Earlier versions skipped this and only left-side assistant rows were visible.)
-- **Tool-call visibility** — for each function call, the agent emits a `tool_group` event twice with the same `toolMsgId`: first with `status: 'Executing'` and a Portuguese description (e.g. "Verificando conexão com Google Calendar"), then with `status: 'Success'` / `'Error'` and `resultDisplay` set to the tool's return value. The existing `composeMessage` logic merges these by msg_id so the UI shows a live status flip.
-- **Dual emission** — `emit()` sends each event to both `ipcBridge.geminiConversation.responseStream` (real-time UI) and `channelEventBus.emitAgentMessage` (WhatsApp reply delivery), then calls `addOrUpdateMessage` to persist to SQLite.
+- **No subprocess** — streams `client.chat.completions.create({ stream: true })` against the gateway in-process via the `openai` SDK (`new OpenAI({ baseURL: model.baseUrl, apiKey: idToken })`).
+- **In-memory history** — maintains `ChatMessage[]` (`system`/`user`/`assistant`/`tool` roles, including assistant `tool_calls`) capped at 40 turns, trimming so it never starts on an orphan `tool` message.
+- **Auth resolution** — fetches a fresh Firebase ID token via `cloudAuthService.getToken()` on every send and passes it as the `apiKey`; if no token (signed out) or no model selected, it emits the `GATEWAY_SIGN_IN_REQUIRED` / `GATEWAY_MODEL_NOT_SELECTED` marker and stops.
+- **System instruction extraction** — on each `sendMessage` call, strips the `[System context:\n…\n]` prefix injected by `ChannelMessageService`, stores the extracted text as `this.systemPrompt`, and prepends it as a `{ role: 'system' }` message. The clean user text is stored in history.
+- **Hardcoded function declarations** — every request includes `tools: CALENDAR_TOOLS_OPENAI` (`src/process/task/directAgent/calendarTools.ts`) with three functions: `google_auth_status`, `google_create_event`, and `google_list_events`. The model cannot call any other tools; there is no MCP, no shell, no file read.
+- **Multi-turn tool loop** — `sendMessage()` runs a `while (continueLoop && toolTurns < MAX_TOOL_TURNS)` loop. Each iteration streams a response; any `tool_calls` are executed via `executeTool()` (dispatching to `googleIntegrationService.getStatus()` / `createEvent()` / `listEvents()`, the latter two using `getAppointmentCalendarId()` to read `google.integration.appointmentCalendarId`, falling back to `'primary'`). Results are appended to history as `tool` messages and the loop continues until the model stops calling tools. `MAX_TOOL_TURNS` is 5 to prevent runaway loops; tool calls are auto-executed (no interactive confirmation).
+- **User-message persistence** — immediately after the system-context extraction, the agent calls `addMessage(conversation_id, { type: 'text', position: 'right', … })` so the client's incoming message appears in the chat UI alongside replies.
+- **Tool-call visibility** — for each tool call, the agent emits a `tool_group` event twice with the same `toolMsgId`: first with `status: 'Executing'` and a description from `describeTool()`, then with `status: 'Success'` / `'Error'` and `resultDisplay` set to the tool's return value. The existing `composeMessage` logic merges these by msg_id so the UI shows a live status flip.
+- **Event emission** — `emit()` forwards each event through `emitAgentEvent` (`./emit`), which streams to the UI in real time and delivers the WhatsApp reply, then persists to SQLite.
 
 ### Dedicated appointment calendar
 
-Receptionist sessions need to schedule appointments without leaking the professional's personal agenda. ThairaAI persists a Google Calendar ID in `google.integration.appointmentCalendarId` (with `appointmentCalendarName` for display); all Gemini tool calls and the system prompt branch on whether it's set.
+Receptionist sessions need to schedule appointments without leaking the professional's personal agenda. ThairaAI persists a Google Calendar ID in `google.integration.appointmentCalendarId` (with `appointmentCalendarName` for display); all receptionist tool calls and the system prompt branch on whether it's set.
 
 **Calendar lifecycle (`GoogleIntegrationService`):**
 - `createCalendar(summary)` calls `calendar.calendars.insert` with the host's local timezone and returns `{ id, summary }`.
@@ -547,7 +547,7 @@ The Appointment Calendar panel renders only when `status.connected` is true. Whe
 
 When a calendar is already configured the panel collapses to its name and a Clear button.
 
-**Agent-side resolution (`GeminiDirectAgent.getAppointmentCalendarId()`):**
+**Agent-side resolution (`getAppointmentCalendarId()` in `calendarTools.ts`):**
 
 ```ts
 async function getAppointmentCalendarId(): Promise<string> {
@@ -595,7 +595,7 @@ if (session?.conversationId) {
 
 ### Google Calendar — `shell.openExternal` in workers
 
-`GoogleIntegrationService.connect()` used `electron.shell.openExternal` to launch the browser OAuth flow. When called from a Gemini CLI tool registered in a forked worker process, `electron.shell` is `undefined`, causing a crash.
+`GoogleIntegrationService.connect()` used `electron.shell.openExternal` to launch the browser OAuth flow. When called from a context where `electron.shell` is `undefined` (a forked worker process, or the standalone server), it crashed.
 
 Fixed by adding a `openUrl()` helper that guards the Electron API and falls back to `exec` with platform-specific commands (same pattern as the standalone `googleIntegrationServer.ts`):
 
@@ -609,9 +609,11 @@ function openUrl(url: string): Promise<void> {
 }
 ```
 
-### WhatsApp Web tab for Gemini conversations
+### WhatsApp Web tab for channel conversations
 
-`GeminiConversationPanel` in `ChatConversation.tsx` now renders the Chat / WhatsApp Web tab bar when `conversation.source === 'whatsapp'`, matching the behaviour of `WhatsAppConversationPanel` (which handles ACP-backed WhatsApp conversations). The same `useWhatsAppWeb()` hook manages the singleton webview slot.
+`WhatsAppConversationPanel` in `ChatConversation.tsx` renders the Chat / WhatsApp Web tab bar for ACP-backed WhatsApp conversations (`wa-acp-*`), driven by the `useWhatsAppWeb()` hook over a singleton webview slot.
+
+> **Note (post-Gemini-removal):** the original implementation routed legacy `gemini`-type WhatsApp conversations through this model-based panel. The Gemini agent has since been removed and business-client sessions use the `thaira-gateway` conversation type — the `ChatConversation` switch now routes **both** `gemini` and `thaira-gateway` to the same `GeminiConversationPanel` (a model selector, message stream, and the WhatsApp Web tab when `source === 'whatsapp'`), so receptionist conversations get the full panel including the WhatsApp Web tab.
 
 ### Receptionist preset
 
@@ -621,6 +623,97 @@ function openUrl(url: string): Promise<void> {
 - Creating appointments only after explicit client confirmation
 - Never providing clinical or psychological guidance
 - Responding in the client's language
+
+---
+
+## Client Intake Flow
+
+Business clients follow a configurable **intake flow** — an ordered (Simple) or branching (Flowchart) script the receptionist walks through before/while booking (e.g. ask reason → request payment proof → schedule). It is **prompt-driven**: the flow is serialized into the business system-context and the receptionist follows it; `menu` steps route on the option number **or** the client's natural-language intent.
+
+### Storage
+
+`assistant.whatsapp.businessMode` gained three fields:
+
+```ts
+{
+  intakeFlow?: IntakeStep[];             // Simple (linear) mode
+  intakeGraph?: IntakeFlowGraph;         // Flowchart (branching) mode
+  intakeMode?: 'simple' | 'flowchart';   // which is active (default 'simple')
+}
+```
+
+All flow types + the pure render/build helpers live in `src/common/types/whatsappIntake.ts` (no Electron deps, unit-tested in `tests/unit/common/whatsappIntake*.test.ts`):
+
+- `IntakeStep` (linear) — `ask | requestFile | schedule | info`, each with `prompt`, optional `required`, and `mediaPath` (info steps).
+- `IntakeFlowGraph` (branching) — `nodes` (`start | menu | message | ask | requestFile | schedule | end`) + `edges`. Menu options branch via `edge.sourceHandle === optionId`.
+- `renderIntakeFlowInstructions(steps, clientNumber)` — linear → numbered instruction block.
+- `renderIntakeGraphInstructions(graph, clientNumber)` — graph → labeled, branch-routed block (`[N1]…` tags, BFS order from `start`, cycle-safe).
+- `linearToGraph(steps)` — seeds a graph from a linear flow (so switching modes loses no work).
+- `buildIntakeGraphFromSpec(spec)` — builds a valid graph from a simplified author spec (used by the chat tool): validates refs/types, generates node + option ids, builds edges, and auto-lays-out positions (BFS depth → y, sibling index → x).
+
+### Runtime injection
+
+`ActionExecutor.buildBusinessContextForMessage()` derives the client's number from `chatId` and inserts the rendered flow **before** the calendar workflow:
+
+```ts
+const useGraph = bm.intakeMode === 'flowchart' && Boolean(bm.intakeGraph?.nodes?.length);
+const intakeFlow = useGraph
+  ? renderIntakeGraphInstructions(bm.intakeGraph, clientNumber)
+  : renderIntakeFlowInstructions(bm.intakeFlow, clientNumber);
+```
+
+An empty/unconfigured flow renders to `''`, so behavior is unchanged when no flow is set.
+
+### Media steps (`[WA_SEND_FILE]`)
+
+`info` (linear) and `message` (graph) steps can carry a `mediaPath`. The renderer appends a `[WA_SEND_FILE]{"number","path","caption"}[/WA_SEND_FILE]` instruction targeting the client's number, reusing the existing WA command pipeline (`WhatsAppCommandDetector` / `WhatsAppMiddleware` → `plugin.sendFile`), which executes and strips the command from the visible reply. A `fs.pathExists` IPC (`ipcBridge.fs.pathExists`) backs the builder's ✓/✗ "file found / not found" indicator.
+
+### Builder UI
+
+Under a **Simple / Flowchart** toggle in `WhatsAppConfigForm`:
+
+- `…/channels/intakeFlow/IntakeFlowBuilder.tsx` — mode toggle. Simple = dnd-kit reorderable `IntakeStepCard` list; Flowchart = lazy-loaded React Flow editor (seeded from the linear flow via `linearToGraph` on first switch).
+- `…/channels/intakeFlow/graph/` — `IntakeGraphEditor` (React Flow canvas, `@xyflow/react`, lazy-loaded so it stays out of the main bundle), `IntakeFlowNodes` (custom node renderers; menu nodes expose one source handle per option), `NodeInspector` (edit prompt / menu options / message media), `useIntakeGraph` (graph ↔ React Flow state, seeds once, pushes changes via a ref-stable `onChange`). The editor has a fullscreen toggle that goes `absolute inset-0` over the tab content area (not the whole viewport, so the sidebar stays visible).
+
+### WhatsApp hub page (`/whatsapp`)
+
+A sider entry (`SiderWhatsAppEntry`) opens a tabbed page (`src/renderer/pages/whatsapp/index.tsx`):
+
+| Tab | Content | `WhatsAppConfigForm` section |
+|---|---|---|
+| **Web** | Singleton WhatsApp Web webview (reuses `WhatsAppWebProvider`) | — |
+| **Connect** | QR / credentials / agent / model + authorized users | `connection` |
+| **Business Mode** | Receptionist fields — name, professional, hours, welcome | `business` |
+| **Intake Flow** | The Simple/Flowchart builder, full-width | `intake` |
+
+`WhatsAppConfigForm` gained a `section` prop (`'all' | 'connection' | 'business' | 'intake'`) so one component renders each tab. **Settings → WhatsApp** uses `section='connection'` (connection only).
+
+### Live refresh
+
+When the flow is written (UI save **or** the chat tool below), `channel.intakeFlowChanged` is emitted (`{ intakeGraph, intakeMode }`). `WhatsAppConfigForm` subscribes, updates state, switches to Flowchart mode, and bumps a `reloadKey` (passed as React `key` to the editor) so it re-seeds. The Intake tab also reloads config on mount, so the flow appears even if the live event is missed.
+
+---
+
+## Authoring the intake flow from chat
+
+Users can describe a flow in plain chat ("menu: 1 appointment → ask reason → request payment proof → schedule; 2 status → send info") and have it appear in the Intake Flow tab. This is a **cross-backend built-in MCP server**, not an in-process tool — because the default chat backend is **aionrs**, and aionrs only receives tools via stdio MCP servers loaded from `mcp.config` (`AionrsManager.buildUserMcpStdioConfigs`). The same channel is how the built-in Google integration reaches aionrs.
+
+### Pieces
+
+| File | Role |
+|---|---|
+| `src/process/resources/builtinMcp/whatsappIntakeServer.ts` | stdio MCP subprocess exposing `whatsapp_set_intake_flow`. Bundled to `out/main/builtin-mcp-whatsapp-intake.js` by `scripts/build-mcp-servers.js`. Forwards the call over TCP to the main process. |
+| `src/process/services/intakeFlowMcpBridge.ts` | Main-process TCP bridge (mirrors `TeamGuideMcpServer`). Runs `buildIntakeGraphFromSpec` → `ProcessConfig.set('assistant.whatsapp.businessMode', { …, intakeGraph, intakeMode:'flowchart' })` → emits `channel.intakeFlowChanged`. |
+| `initStorage.ts` → `upsertWhatsAppIntakeMcpServer(port, token)` | Registers/refreshes the `aionui-whatsapp-intake` entry in `mcp.config` with the live bridge `AION_MCP_PORT` / `AION_MCP_TOKEN` env. |
+| `initBridge.ts` | On boot: `startIntakeFlowBridge()` (random TCP port + auth token) → `upsertWhatsAppIntakeMcpServer(port, token)`. Refreshed every boot since the port changes. |
+
+### Why a bridge (not a direct config write)
+
+An MCP subprocess can't cleanly write shared app config (main-process `ProcessConfig` cache coherence) nor emit IPC to the renderer. The TCP bridge routes the work back to the main process, which owns both. This is the same pattern the team-guide MCP uses to expose `aion_create_team` to subprocess agents (`TeamGuideMcpServer` + `teamGuideMcpStdio` + `tcpHelpers`).
+
+### Confirm-before-replace
+
+If a non-empty `intakeGraph` already exists and the call omits `confirmReplace: true`, the bridge returns a message instructing the agent to confirm with the user and re-call with `confirmReplace=true` — no UI dialog. The tool is registered for all backends; only Gemini previously had an in-process variant, which was removed in favour of this single MCP implementation.
 
 ---
 
@@ -657,7 +750,7 @@ The file is loaded automatically when the user asks about WhatsApp messaging. It
 
 ### Execution pipeline
 
-After each AI turn, all three agent managers (`AcpAgentManager`, `GeminiAgentManager`, `AionrsManager`) call `processWaInMessage` if `hasWaCommands` is true:
+After each AI turn, the tool-capable agent managers (`AcpAgentManager`, `AionrsManager`) call `processWaInMessage` if `hasWaCommands` is true:
 
 ```
 AI response text

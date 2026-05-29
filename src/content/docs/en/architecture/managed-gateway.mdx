@@ -33,7 +33,7 @@ ThairaAI desktop ──(1 Firebase sign-in)──► Firebase Auth ──► ID 
 │  Thaira Gateway  (Cloud Run, stateless, scales 0→N)            │
 │  verify JWT → resolve user→company→plan → (quota) →            │
 │  forward → meter usage + real cost                             │
-│  Cloud SQL (Postgres): companies, users, usage_events          │
+│  Cloud SQL (Postgres): tenant + usage tables                   │
 └───────────────┬────────────────────────────────────────────────┘
                 │ (3) Bearer <upstream key>
                 ▼
@@ -49,7 +49,7 @@ The gateway is **upstream-agnostic**: pointing it at OpenRouter vs a self-hosted
 | Component | Responsibility | Runtime |
 |---|---|---|
 | **Thaira Gateway** | Verify Firebase JWT, resolve tenant, forward to upstream, meter tokens + real cost | Node 22 + TypeScript + Hono, Cloud Run |
-| **Cloud SQL (Postgres)** | Source of truth: companies, users, entitlements, usage | Cloud SQL (reuse `neo-thairahub`) |
+| **Cloud SQL (Postgres)** | Source of truth: companies, users, entitlements, usage | Cloud SQL (reuses an existing instance) |
 | **OpenRouter** | OpenAI-compatible upstream; routing/fallback across providers; returns real cost | Managed (external) |
 | **Firebase Auth** | Identity (Google + email/password + SSO), issues ID tokens | Managed (GCP) |
 | **Secret Manager** | Upstream key, DB URL, Firebase admin creds | GCP |
@@ -66,11 +66,12 @@ The desktop drives Firebase auth from the **main process** via the Identity Tool
 
 ## Data model (Cloud SQL / Postgres)
 
-- `companies` — `id, name, stripe_customer_id, plan, status, created_at`
-- `users` — `id, firebase_uid (unique), email, company_id, role, status`
-- `plan_limits` — `plan, monthly_token_cap, monthly_cost_cap (USD), rps_limit, allowed_models[]` (any field `NULL` = unlimited)
-- `usage_events` — append-only: `company_id, user_id, model, endpoint, input_tokens, output_tokens, cost_usd, status_code, ts` (no prompt/response content)
-- `usage_counters` — per-period rollup: `company_id, period, tokens_used, cost_usd, requests`
+The schema is intentionally minimal and is **not documented here**. At a high level it covers:
+
+- Tenant + identity records (companies, users) keyed off the Firebase UID.
+- Per-plan entitlements (caps, rate limits, model allow-list); unset fields mean unlimited.
+- Append-only usage events (model, endpoint, token counts, real cost, status) — **no prompt/response content is ever stored**.
+- Per-period usage rollups used for fast quota checks.
 
 Phase-1 onboarding: invite-based, with optional email-domain auto-join; a personal company is created per user otherwise.
 
@@ -80,7 +81,7 @@ The gateway injects `usage: { include: true }` (and `stream_options.include_usag
 
 - **Non-streaming:** the response is buffered and `usage` parsed (`prompt/completion_tokens` + `cost`).
 - **Streaming:** the upstream body is `tee()`'d — one branch streams to the client unchanged (no added latency), the other is scanned for the final usage chunk (which carries `cost`).
-- Stored in `usage_events.cost_usd` and summed into `usage_counters.cost_usd`. Metering is best-effort and never breaks the user's request. No prompt/response content is stored.
+- Stored on the usage event and summed into the per-period rollup. Metering is best-effort and never breaks the user's request. No prompt/response content is stored.
 
 OpenRouter's `usage` object (verified against live API):
 
@@ -89,15 +90,15 @@ OpenRouter's `usage` object (verified against live API):
   "cost_details": { "upstream_inference_cost": 0.00000555 } }
 ```
 
-Per-request costs are ~`1e-6` USD, so `cost_usd` columns use `NUMERIC(_, 8)` scale.
+Per-request costs are ~`1e-6` USD, so cost columns use a high-scale `NUMERIC` type.
 
 ## Plan enforcement
 
-Each plan's entitlements live in `plan_limits`; the resolved tenant carries them through the request. Enforcement is layered onto the request path:
+Each plan's entitlements live in the plan-limits table; the resolved tenant carries them through the request. Enforcement is layered onto the request path:
 
-- **Monthly cost / token cap** — `enforceQuota` runs before the AI-call routes and compares the current period's `usage_counters` rollup against the plan's `monthly_cost_cap` (USD) / `monthly_token_cap`. Over the cap returns **402** with the used-vs-limit amounts (USD **and** R$). This is a pre-request check against the durable counter; since usage is recorded after each response, a request in flight can push slightly past the cap — an accepted small overage that the Redis track will tighten with atomic pre-decrement.
-- **Model allow-list** — a request for a model outside the plan's `allowed_models` is rejected with **403**; `GET /v1/models` is filtered to the same allow-list so the desktop only offers usable models. `NULL` allows every model.
-- **RPS limit** — `rps_limit` is stored but enforced in the Redis (Memorystore) track, not in-process.
+- **Monthly cost / token cap** — `enforceQuota` runs before the AI-call routes and compares the current period's usage rollup against the plan's cost cap (USD) / token cap. Over the cap returns **402** with the used-vs-limit amounts (USD **and** R$). This is a pre-request check against the durable counter; since usage is recorded after each response, a request in flight can push slightly past the cap — an accepted small overage that the Redis track will tighten with atomic pre-decrement.
+- **Model allow-list** — a request for a model outside the plan's allow-list is rejected with **403**; `GET /v1/models` is filtered to the same allow-list so the desktop only offers usable models. An unset allow-list allows every model.
+- **RPS limit** — the per-plan RPS limit is stored but enforced in the Redis (Memorystore) track, not in-process.
 
 `GET /v1/usage` returns the current period's tokens, `cost_usd`, the R$ estimate, the plan caps (USD + R$), and the live FX rate — the desktop reads it to show a company its consumption.
 
@@ -111,11 +112,11 @@ The USD→BRL rate is fetched live from a keyless FX API (default [open.er-api.c
 
 ## Billing (Stripe)
 
-Flat subscription tiers: each plan maps to a Stripe Price (`plan_limits.stripe_price_id`); the plan's cost cap enforces fair use, so a customer pays a fixed monthly amount (in R$) regardless of usage up to the cap. No card data touches the gateway — Checkout and the Customer Portal are Stripe-hosted.
+Flat subscription tiers: each plan maps to a Stripe Price; the plan's cost cap enforces fair use, so a customer pays a fixed monthly amount (in R$) regardless of usage up to the cap. No card data touches the gateway — Checkout and the Customer Portal are Stripe-hosted.
 
 - **`POST /v1/billing/checkout`** `{ plan }` → ensures a Stripe Customer for the company (created + persisted on first use), creates a subscription Checkout Session, returns its hosted `url`. The desktop opens it in the browser.
 - **`POST /v1/billing/portal`** → returns a Customer Portal `url` to manage/cancel the subscription.
-- **`POST /webhooks/stripe`** (public, **outside** the `/v1` auth gate; authenticated by the Stripe signature over the raw body) is the source of truth for `companies.plan` / `status`. It handles `customer.subscription.created|updated|deleted` (price → plan, status mapped to `active`/`past_due`/`canceled`, `stripe_subscription_id` recorded) and `invoice.payment_failed` (→ `past_due`). Handlers are idempotent so a `500` safely triggers Stripe's retry.
+- **`POST /webhooks/stripe`** (public, **outside** the `/v1` auth gate; authenticated by the Stripe signature over the raw body) is the source of truth for a company's plan / status. It handles `customer.subscription.created|updated|deleted` (price → plan, status mapped to `active`/`past_due`/`canceled`, subscription id recorded) and `invoice.payment_failed` (→ `past_due`). Handlers are idempotent so a `500` safely triggers Stripe's retry.
 
 The gateway boots fine without Stripe configured (`config.stripe.enabled` is false when the secret/webhook env are absent); the billing routes then return `503`.
 
@@ -124,7 +125,7 @@ The gateway boots fine without Stripe configured (`config.stripe.enabled` is fal
 The desktop was already "gateway-ready" (`IProvider` carries `baseUrl` + `apiKey`, with an `isGateway` flag). The managed model adds:
 
 - **`cloudAuth` IPC bridge** + `CloudAuthService` (`src/process/services/cloudAuth/`) — Firebase sign-in/up, encrypted token storage, auto-refresh.
-- **Process-side token injection** — `applyGatewayAuthIfNeeded()` at the top of `GeminiAgent.initialize()`: when the selected provider `isGateway`, it fetches a fresh token and re-runs `initClientEnv()` so `OPENAI_API_KEY` carries it. One chokepoint, no stale tokens, nothing persisted in config.
+- **Process-side token injection** — the interactive agent (`AionrsManager`) fetches a fresh Firebase token from the main process (`cloudAuthService.getToken()`) and sets it as the model's `apiKey` before the agent runs. Managed SaaS is gateway-only, so this is **unconditional** (no `isGateway` branch); `safeStorage` is only available in the main process, so the token is injected here rather than in spawned processes. No stale tokens, nothing persisted in config.
 - **Auto-provisioned provider** — on sign-in, a built-in `Thaira` gateway provider (`baseUrl = THAIRA_GATEWAY_URL`, models from `/v1/models`) is created/refreshed and enabled; disabled on sign-out.
 - **Sign-in UI** — a "Thaira Account" tab in Settings (`CloudAccountModalContent.tsx`).
 
@@ -132,9 +133,9 @@ The desktop was already "gateway-ready" (`IProvider` carries `baseUrl` + `apiKey
 
 Channel business-mode replies are **gateway-only** — BYOK and local providers are never used there, so every WhatsApp/Telegram message is metered and capped like any other gateway call.
 
-- **`GatewayDirectAgent`** (`src/process/task/directAgent/`) is the channel reply agent: a lightweight, no-CLI agent that talks OpenAI-compatible `/v1/chat/completions` to the gateway with a fresh Firebase token. It is a behavior-for-behavior port of the BYOK Gemini-native `GeminiDirectAgent` — same receptionist persona, streaming, and Google Calendar function-calling (which works over the OpenAI tool protocol). The agent factory picks it whenever the conversation's model `isGateway`.
+- **`ThairaGatewayAgent`** (`src/process/task/directAgent/ThairaGatewayAgent.ts`, conversation type `thaira-gateway`) is the business-client receptionist: a lightweight, no-CLI agent that talks OpenAI-compatible `/v1/chat/completions` to the gateway with a fresh Firebase token. It is a behavior-for-behavior successor to the now-removed BYOK Gemini-native `GeminiDirectAgent` — same receptionist persona, streaming, history (capped at 40 turns), and Google Calendar function-calling (over the OpenAI tool protocol, capped at `MAX_TOOL_TURNS` and auto-executed with no interactive confirmation). The agent factory selects it for channel conversations of type `thaira-gateway`, which the gateway dispatcher assigns whenever the channel user's `role === 'client'`.
 - **Model resolution** — `getChannelDefaultModel()` / `resolveChannelGatewayModel()` always return the managed gateway provider. The model is the user's explicit per-channel choice, or `DEFAULT_CHANNEL_MODEL` (a low-cost default) when none is set. Signed out, they return a placeholder so the agent surfaces a clear "sign in to Thaira" message instead of silently falling back to a key.
-- **Always-current model** — a `gemini`-type channel conversation re-resolves its model from the saved channel default on every message, so a model change in Settings (or the chat header) takes effect immediately and legacy conversations migrate off any stale/BYOK model.
+- **Always-current model** — a `thaira-gateway`-type channel conversation re-resolves its model from the saved channel default on every message, so a model change in Settings (or the chat header) takes effect immediately. (Legacy `gemini` client rows were migrated to `thaira-gateway` by the v28 data migration.)
 - **Gateway-only pickers** — the WhatsApp/Telegram model selectors (Settings **and** the in-conversation chat header) are filtered to gateway models only; selecting one persists it as the channel default. The picker reads `/v1/models` with the Firebase token and falls back to the sign-in–populated list, so a signed-in user always sees the gateway models.
 
 **Desktop env required for live use** (`.env`):
@@ -144,11 +145,11 @@ Channel business-mode replies are **gateway-only** — BYOK and local providers 
 
 ## Deployment
 
-**Live:** `https://thaira-gateway-714687354180.southamerica-east1.run.app` (project `thaira`, region `southamerica-east1`).
+**Live:** deployed to Cloud Run in the `southamerica-east1` region. (Service URL, project ID, and resource names are kept in private infra config, not in these docs.)
 
-- **Gateway** → Cloud Run (stateless, scales 0→N, `--max-instances 5`). Secrets `openrouter-api-key` + `gateway-db-url` in Secret Manager; runtime SA has `secretmanager.secretAccessor` on both + `cloudsql.client`. Firebase Admin uses the SA via Application Default Credentials (no key file in the image).
-- **Database** → reuses the Cloud SQL instance `neo-thairahub` (Postgres 15) with an isolated database `thaira_gateway` + user `gateway_app` (no new instance cost), reached through the Cloud SQL connector socket `/cloudsql/thaira:southamerica-east1:neo-thairahub`.
-- **Migrations** → run via the Cloud SQL Auth Proxy before first traffic (`001`–`003` applied).
+- **Gateway** → Cloud Run (stateless, scales 0→N, `--max-instances 5`). The upstream key + DB URL live in Secret Manager; the runtime SA has `secretmanager.secretAccessor` on those + `cloudsql.client`. Firebase Admin uses the SA via Application Default Credentials (no key file in the image).
+- **Database** → reuses an existing Cloud SQL Postgres 15 instance with an isolated database + dedicated app user (no new instance cost), reached through the Cloud SQL connector socket.
+- **Migrations** → run via the Cloud SQL Auth Proxy before first traffic.
 - **Health** → `GET /health` (not `/healthz` — Google Front End intercepts that path prefix on `*.run.app`).
 - For SMB privacy, configure OpenRouter data-retention / zero-data-retention provider preferences.
 
@@ -166,8 +167,8 @@ Channel business-mode replies are **gateway-only** — BYOK and local providers 
 - Gateway: auth → tenant resolution → forward → real-cost metering. Endpoints `/health`, `/v1/chat/completions`, `/v1/messages`, `/v1/models`, `/v1/usage`.
 - Plan enforcement: monthly cost/token cap (402), per-plan model allow-list (403 + filtered `/v1/models`), `/v1/usage` reporting, USD→BRL live FX with R$ estimates. Verified against live AwesomeAPI + Postgres.
 - Desktop: `cloudAuth` bridge + service, process-side token injection, auto-provisioned `Thaira` provider, "Thaira Account" sign-in UI with usage card (tokens + R$/US$ + cap), en + pt-BR.
-- Channels: WhatsApp + Telegram business replies routed through the gateway via `GatewayDirectAgent` (OpenAI-compatible, fresh token), gateway-only model selection with a low-cost default and always-current per-message resolution. Verified end-to-end including Google Calendar tool-calls.
-- **Deployed to Cloud Run** (`southamerica-east1`, project `thaira`) on Cloud SQL `neo-thairahub` / DB `thaira_gateway`. **Full e2e verified live:** Firebase sign-in → tenant provisioned in Postgres → `/v1/chat/completions` to OpenRouter (real cost recorded) → `/v1/usage` with live R$. Desktop wired (`THAIRA_GATEWAY_URL` + a dedicated API-restricted `FIREBASE_WEB_API_KEY`).
+- Channels: WhatsApp + Telegram business replies routed through the gateway via `ThairaGatewayAgent` (OpenAI-compatible, fresh token), gateway-only model selection with a low-cost default and always-current per-message resolution. Verified end-to-end including Google Calendar tool-calls.
+- **Deployed to Cloud Run** (`southamerica-east1`) on an existing Cloud SQL instance with an isolated gateway database. **Full e2e verified live:** Firebase sign-in → tenant provisioned in Postgres → `/v1/chat/completions` to OpenRouter (real cost recorded) → `/v1/usage` with live R$. Desktop wired (`THAIRA_GATEWAY_URL` + a dedicated API-restricted `FIREBASE_WEB_API_KEY`).
 - **Stripe billing (flat tiers)**: `/v1/billing/checkout` + `/v1/billing/portal` (hosted Checkout / Customer Portal) and the `/webhooks/stripe` reconciler are deployed and **verified in sandbox** (checkout URL → subscription → webhook set `plan=starter, status=active`; portal URL returned). Desktop "Thaira Account" tab has Upgrade (Starter/Pro) + Manage-billing buttons.
 
 **Pending:**

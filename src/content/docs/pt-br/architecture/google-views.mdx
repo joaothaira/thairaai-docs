@@ -1,7 +1,6 @@
 ---
 title: Arquitetura das Visualizações de Gmail e Agenda
 description: Design interno das visualizações nativas de Gmail e Agenda para contribuidores.
-draft: true
 ---
 
 Esta página cobre o design interno das visualizações nativas de Gmail e Agenda, o fluxo de "analisar e-mail no chat" e a marcação do Gmail na barra lateral de histórico.
@@ -49,7 +48,6 @@ O processo renderer não guarda tokens nem faz chamadas de rede — tudo passa p
 | `src/process/services/google/GoogleIntegrationService.ts` | Adicionado `getEmailDetail(id)` + tipo `GmailMessageDetail` — busca `format: 'full'` e percorre a árvore MIME (`extractBody`, prefere `text/html` depois `text/plain`, decodificado em base64url). `listEmails(maxResults, pageToken?)` agora retorna `{ messages, nextPageToken }`. `listEvents(maxResults, calendarId, timeMin?, timeMax?)` aceita uma janela de tempo explícita. |
 | `src/process/bridge/googleIntegrationBridge.ts` | Adicionado o provider `getEmail`. `listEmails` repassa `pageToken`/`nextPageToken`. `listEvents` resolve o `appointmentCalendarId` configurado em `google.integration` (fallback `primary`) quando o renderer não fixa um calendário. |
 | `src/common/adapter/ipcBridge.ts` | Bloco `googleIntegration`: adicionado `getEmail`; estendidos `listEmails` (param `pageToken`, dado `nextPageToken`) e `listEvents` (`timeMin`/`timeMax`). Adicionado `origin?: string` a `ICreateConversationParams['extra']`. |
-| `src/process/agent/gemini/cli/tools/google-integration.ts` | Atualizado o chamador de `listEmails` para o novo formato de retorno `{ messages }`. |
 | `src/renderer/components/layout/Router.tsx` | Registrada a rota `/google`. |
 | `src/renderer/components/layout/Sider/index.tsx` + `SiderNav/index.ts` | Integração do `SiderGoogleEntry` e seu handler de navegação. |
 | `src/renderer/pages/guid/GuidPage.tsx` | Preenche o rascunho de entrada a partir de `location.state.initialInput`; passa `messageOrigin` (`location.state.origin`) para o `useGuidSend`. |

@@ -1,7 +1,6 @@
 ---
 title: Gmail & Calendar Views Architecture
 description: Internal design of the native Gmail and Calendar views for contributors.
-draft: true
 ---
 
 This page covers the internal design of the native Gmail and Calendar views, the "analyze email in chat" flow, and the Gmail marker in the chat-history sidebar.
@@ -49,7 +48,6 @@ The renderer process holds no tokens and makes no network calls — everything g
 | `src/process/services/google/GoogleIntegrationService.ts` | Added `getEmailDetail(id)` + `GmailMessageDetail` type — fetches `format: 'full'` and walks the MIME tree (`extractBody`, prefers `text/html` then `text/plain`, base64url-decoded). `listEmails(maxResults, pageToken?)` now returns `{ messages, nextPageToken }`. `listEvents(maxResults, calendarId, timeMin?, timeMax?)` accepts an explicit time window. |
 | `src/process/bridge/googleIntegrationBridge.ts` | Added `getEmail` provider. `listEmails` passes through `pageToken`/`nextPageToken`. `listEvents` resolves the configured `appointmentCalendarId` from `google.integration` (fallback `primary`) when the renderer doesn't pin a calendar. |
 | `src/common/adapter/ipcBridge.ts` | `googleIntegration` block: added `getEmail`; extended `listEmails` (params `pageToken`, data `nextPageToken`) and `listEvents` (`timeMin`/`timeMax`). Added `origin?: string` to `ICreateConversationParams['extra']`. |
-| `src/process/agent/gemini/cli/tools/google-integration.ts` | Updated the `listEmails` caller to the new `{ messages }` return shape. |
 | `src/renderer/components/layout/Router.tsx` | Registered the `/google` route. |
 | `src/renderer/components/layout/Sider/index.tsx` + `SiderNav/index.ts` | Wired up `SiderGoogleEntry` and its navigation handler. |
 | `src/renderer/pages/guid/GuidPage.tsx` | Seeds the draft input from `location.state.initialInput`; passes `messageOrigin` (`location.state.origin`) into `useGuidSend`. |

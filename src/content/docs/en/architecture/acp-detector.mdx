@@ -33,6 +33,8 @@ initialize()
 └── this.isInitialized = true
 ```
 
+> **Managed-SaaS note.** `AgentRegistry` still *synthesizes* a `gemini` entry (and the merge order below still lists it) for backwards compatibility, but the Gemini agent itself was removed: it has no agent factory and cannot run. In managed mode the picker IPC (`getAvailableAgents` in `acpConversationBridge.ts`) filters the detected list to **`aionrs` only** — every other backend, `gemini` included, is hidden unless `THAIRA_DEV_AGENTS=1`. So the synthesized `gemini` is effectively legacy/dev-only and not user-facing.
+
 ### Detection sources
 
 **Source 1 — `detectBuiltinAgents()`**

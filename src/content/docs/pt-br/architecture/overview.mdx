@@ -11,7 +11,7 @@ O Electron divide um app em processos isolados, cada um com APIs diferentes disp
 
 - **Processo principal (main)** (`src/process/`, `src/index.ts`) — lógica da aplicação, banco de dados, tratamento de IPC. Tem APIs de Node.js + Electron, **sem DOM**.
 - **Processo de renderização (renderer)** (`src/renderer/`) — a UI React. Tem DOM, **sem APIs de Node.js**.
-- **Processos worker** (`src/process/worker/`) — tarefas de IA em segundo plano (workers gemini, codex, acp). Node.js, **sem APIs de Electron**.
+- **Processos worker** (`src/process/worker/`) — tarefas em segundo plano derivadas, como o executor de ciclo de vida de extensões. Node.js, **sem APIs de Electron**. (Os gerenciadores de agente agora rodam no processo principal — `enableFork=false` — desde que o agente Gemini, o único que derivava um worker, foi removido.)
 
 A regra de ouro: **nunca misture as APIs de dois tipos de processo.** Um arquivo do renderer não pode `import fs`; um arquivo do processo principal não pode tocar o DOM. Tudo que precisa cruzar a fronteira passa pelo IPC bridge.
 

@@ -1,7 +1,6 @@
 ---
 title: Arquitetura do Canal WhatsApp
 description: Design interno da integração WhatsApp para contribuidores.
-draft: true
 ---
 
 Esta página cobre o design interno da integração WhatsApp para contribuidores.
@@ -151,6 +150,8 @@ Cliente autorizado envia mensagem enquanto o chat está pausado
 | `src/process/task/GeminiAgentManager.ts` | Idem. |
 | `src/process/task/AionrsManager.ts` | Idem. |
 | `package.json` | Adicionada dependência de desenvolvimento `concurrently`. Novos scripts: `start:wa`, `start:wa:whisper`. |
+
+> **Nota — agente Gemini removido.** As listas de arquivos acima são o changelog original do modo-negócio do WhatsApp. O ThairaAI removeu desde então os agentes Gemini (`GeminiAgentManager`, `GeminiDirectAgent`, `src/process/agent/gemini/**`, `src/process/worker/gemini.ts`). O recepcionista de cliente-empresa agora é o **`ThairaGatewayAgent`** (`src/process/task/directAgent/ThairaGatewayAgent.ts`, tipo de conversa `thaira-gateway`), o agente interativo do dono/desktop é o **`AionrsManager`**, e o conjunto de ferramentas de calendário passou para `src/process/task/directAgent/calendarTools.ts`. Onde as seções abaixo citam uma classe Gemini, leia como seu equivalente atual.
 
 ## Decisões de design
 
@@ -399,26 +400,26 @@ RESTRICTIONS (calendar configured):
 
 Quando a agenda dedicada **não** está configurada, o prompt instrui a IA a não chamar `google_list_events` de forma alguma (ler a agenda primária vazaria dados privados).
 
-`GeminiDirectAgent` extrai o bloco `[System context:…]` via regex e passa o texto capturado como `config.systemInstruction` para `ai.models.generateContentStream()`. O texto limpo do usuário (sem o wrapper) é o que vai para o histórico. Isso transforma a persona numa instrução formal de sistema, melhorando a aderência.
+`ThairaGatewayAgent` extrai o bloco `[System context:…]` via regex, guarda o texto capturado em `this.systemPrompt` e o adiciona como uma mensagem `{ role: 'system' }` na requisição `/v1/chat/completions` compatível com OpenAI. O texto limpo do usuário (sem o wrapper) é o que vai para o histórico. Isso transforma a persona numa instrução formal de sistema, melhorando a aderência.
 
-### GeminiDirectAgent
+### ThairaGatewayAgent
 
-`src/process/task/GeminiDirectAgent.ts` é uma implementação leve de `IAgentManager` para sessões Gemini de clientes em Modo Profissional. Ele **não** desabilita chamadas de ferramentas — em vez disso declara um conjunto mínimo e fixo de ferramentas e executa essas chamadas em processo, sem CLI do Gemini nem subprocesso MCP.
+`src/process/task/directAgent/ThairaGatewayAgent.ts` é uma implementação leve de `IAgentManager` para sessões de recepcionista de clientes-empresa (tipo de conversa `thaira-gateway`). Ele **não** desabilita chamadas de ferramentas — em vez disso declara um conjunto mínimo e fixo de ferramentas de calendário e as executa em processo, sem CLI e sem subprocesso MCP. É o sucessor do removido `GeminiDirectAgent`: mesmo comportamento, mas o transporte é o gateway gerenciado da Thaira (compatível com OpenAI) em vez da API do Gemini, então toda resposta é medida.
 
 Características:
-- **Sem subprocesso** — chama `@google/genai` `generateContentStream` diretamente no processo principal.
-- **Histórico em memória** — `Array<{ role, parts }>` (suporta partes `text`, `functionCall` e `functionResponse`), limitado a 40 turnos.
-- **Resolução de chave de API** — usa `model.apiKey` se definido; senão cai para `process.env.GEMINI_API_KEY`. O valor explícito é sempre passado para `GoogleGenAI({ apiKey })` para que `prepareEnvironment()` de outros agentes não derrube esta sessão.
-- **Extração da instrução de sistema** — a cada `sendMessage`, remove o prefixo `[System context:\n…\n]`, guarda o texto extraído em `this.systemPrompt` e o passa como `config.systemInstruction`. O texto limpo do usuário é o que entra no histórico.
-- **Function declarations fixas** — toda requisição inclui `tools: CALENDAR_TOOLS` com três funções: `google_auth_status`, `google_create_event` e `google_list_events`. O Gemini não consegue chamar mais nada — não há MCP, shell, leitura de arquivo.
-- **Laço multi-turn para ferramentas** — `sendMessage()` roda um `while (continueLoop && toolTurns < MAX_TOOL_TURNS)`. A cada iteração faz streaming da resposta; se chegarem partes `functionCall`, elas são executadas via `executeTool()` (que despacha para `googleIntegrationService.getStatus()` / `createEvent()` / `listEvents()`, sendo que estas duas últimas usam `getAppointmentCalendarId()` para ler de `google.integration.appointmentCalendarId`, caindo para `'primary'` se vazio). Os resultados voltam para o histórico como `functionResponse` e o laço continua até o Gemini parar de chamar ferramentas. Limite de 5 turnos para evitar loops infinitos.
-- **Persistência da mensagem do cliente** — imediatamente após extrair o contexto, o agente chama `addMessage(conversation_id, { type: 'text', position: 'right', … })`. Sem isso, só as respostas do assistente apareciam no chat — a versão anterior tinha esse bug.
-- **Visibilidade das tool calls** — para cada chamada, o agente emite um evento `tool_group` duas vezes com o mesmo `toolMsgId`: primeiro com `status: 'Executing'` e descrição em pt-BR (ex.: "Verificando conexão com Google Calendar"), depois com `status: 'Success'` ou `'Error'` e `resultDisplay` com o retorno da ferramenta. O `composeMessage` mescla por msg_id, então a UI mostra a transição de status ao vivo.
-- **Emissão dupla** — `emit()` envia cada evento tanto para `ipcBridge.geminiConversation.responseStream` (UI em tempo real) quanto para `channelEventBus.emitAgentMessage` (entrega no WhatsApp), e chama `addOrUpdateMessage` para persistir no SQLite.
+- **Sem subprocesso** — faz streaming via `client.chat.completions.create({ stream: true })` contra o gateway, em processo, usando o SDK `openai` (`new OpenAI({ baseURL: model.baseUrl, apiKey: idToken })`).
+- **Histórico em memória** — `ChatMessage[]` (papéis `system`/`user`/`assistant`/`tool`, incluindo `tool_calls` do assistente), limitado a 40 turnos, aparando para nunca começar numa mensagem `tool` órfã.
+- **Resolução de autenticação** — busca um token Firebase novo via `cloudAuthService.getToken()` a cada envio e o passa como `apiKey`; sem token (deslogado) ou sem modelo selecionado, emite o marcador `GATEWAY_SIGN_IN_REQUIRED` / `GATEWAY_MODEL_NOT_SELECTED` e para.
+- **Extração da instrução de sistema** — a cada `sendMessage`, remove o prefixo `[System context:\n…\n]`, guarda o texto extraído em `this.systemPrompt` e o adiciona como mensagem `{ role: 'system' }`. O texto limpo do usuário é o que entra no histórico.
+- **Function declarations fixas** — toda requisição inclui `tools: CALENDAR_TOOLS_OPENAI` (`src/process/task/directAgent/calendarTools.ts`) com três funções: `google_auth_status`, `google_create_event` e `google_list_events`. O modelo não consegue chamar mais nada — não há MCP, shell, leitura de arquivo.
+- **Laço multi-turn para ferramentas** — `sendMessage()` roda um `while (continueLoop && toolTurns < MAX_TOOL_TURNS)`. A cada iteração faz streaming da resposta; quaisquer `tool_calls` são executadas via `executeTool()` (que despacha para `googleIntegrationService.getStatus()` / `createEvent()` / `listEvents()`, sendo que estas duas últimas usam `getAppointmentCalendarId()` para ler `google.integration.appointmentCalendarId`, caindo para `'primary'` se vazio). Os resultados voltam para o histórico como mensagens `tool` e o laço continua até o modelo parar de chamar ferramentas. `MAX_TOOL_TURNS` é 5 para evitar loops infinitos; as tool calls são auto-executadas (sem confirmação interativa).
+- **Persistência da mensagem do cliente** — imediatamente após extrair o contexto, o agente chama `addMessage(conversation_id, { type: 'text', position: 'right', … })` para que a mensagem recebida do cliente apareça no chat ao lado das respostas.
+- **Visibilidade das tool calls** — para cada chamada, o agente emite um evento `tool_group` duas vezes com o mesmo `toolMsgId`: primeiro com `status: 'Executing'` e descrição vinda de `describeTool()`, depois com `status: 'Success'` ou `'Error'` e `resultDisplay` com o retorno da ferramenta. O `composeMessage` mescla por msg_id, então a UI mostra a transição de status ao vivo.
+- **Emissão de eventos** — `emit()` encaminha cada evento via `emitAgentEvent` (`./emit`), que faz streaming para a UI em tempo real e entrega a resposta no WhatsApp, e então persiste no SQLite.
 
 ### Agenda dedicada de atendimentos
 
-Sessões de recepcionista precisam agendar sem vazar a agenda pessoal do profissional. O ThairaAI persiste o ID de uma Google Calendar em `google.integration.appointmentCalendarId` (com `appointmentCalendarName` para exibição); todas as ferramentas do Gemini e o próprio prompt do sistema ramificam conforme isso esteja preenchido.
+Sessões de recepcionista precisam agendar sem vazar a agenda pessoal do profissional. O ThairaAI persiste o ID de uma Google Calendar em `google.integration.appointmentCalendarId` (com `appointmentCalendarName` para exibição); todas as ferramentas do recepcionista e o próprio prompt do sistema ramificam conforme isso esteja preenchido.
 
 **Ciclo de vida (`GoogleIntegrationService`):**
 - `createCalendar(summary)` chama `calendar.calendars.insert` com o timezone local e retorna `{ id, summary }`.
@@ -432,7 +433,7 @@ O painel "Agenda de Atendimentos" só aparece quando `status.connected` é verda
 
 Quando uma agenda já está configurada, o painel colapsa para o nome dela mais um botão Limpar.
 
-**Resolução no lado do agente (`GeminiDirectAgent.getAppointmentCalendarId()`):**
+**Resolução no lado do agente (`getAppointmentCalendarId()` em `calendarTools.ts`):**
 
 ```ts
 async function getAppointmentCalendarId(): Promise<string> {
@@ -538,7 +539,7 @@ O arquivo é carregado automaticamente quando o usuário pergunta sobre mensagen
 
 ### Pipeline de execução
 
-Após cada turno da IA, os três gerenciadores (`AcpAgentManager`, `GeminiAgentManager`, `AionrsManager`) chamam `processWaInMessage` se `hasWaCommands` for verdadeiro:
+Após cada turno da IA, os gerenciadores com ferramentas (`AcpAgentManager`, `AionrsManager`) chamam `processWaInMessage` se `hasWaCommands` for verdadeiro:
 
 ```
 Texto de resposta da IA

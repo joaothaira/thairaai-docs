@@ -33,6 +33,8 @@ initialize()
 └── this.isInitialized = true
 ```
 
+> **Nota sobre o SaaS gerenciado.** O `AgentRegistry` ainda *sintetiza* uma entrada `gemini` (e a ordem de mesclagem abaixo ainda a lista) por compatibilidade, mas o agente Gemini em si foi removido: não tem fábrica de agentes e não pode rodar. No modo gerenciado, o IPC do seletor (`getAvailableAgents` em `acpConversationBridge.ts`) filtra a lista detectada para **apenas `aionrs`** — todos os outros backends, incluindo `gemini`, ficam ocultos a menos que `THAIRA_DEV_AGENTS=1`. Portanto o `gemini` sintetizado é efetivamente legado/só-dev e não aparece para o usuário.
+
 ### Fontes de detecção
 
 **Fonte 1 — `detectBuiltinAgents()`**
